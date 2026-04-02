@@ -56,7 +56,37 @@ export default class BootScene extends Phaser.Scene {
     this.load.image('enemy-기병',   'sprites/enemies/enemy-spear.png');
   }
 
+  // 흰색(근사) 배경 픽셀을 투명하게 처리
+  _removeWhiteBg(key, threshold = 230) {
+    const texture = this.textures.get(key);
+    if (!texture || texture.key === '__MISSING') return;
+
+    const src = texture.getSourceImage();
+    const canvas = document.createElement('canvas');
+    canvas.width  = src.width;
+    canvas.height = src.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(src, 0, 0);
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const d = imageData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > threshold && d[i+1] > threshold && d[i+2] > threshold) {
+        d[i+3] = 0;
+      }
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    this.textures.remove(key);
+    this.textures.addCanvas(key, canvas);
+  }
+
   create() {
+    // 적군 이미지 흰 배경 제거
+    ['enemy-기사', 'enemy-마법사', 'enemy-궁수', 'enemy-성직자', 'enemy-기병'].forEach(k => {
+      this._removeWhiteBg(k);
+    });
+
     this.scene.start(SCENE.TITLE);
   }
 }

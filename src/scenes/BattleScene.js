@@ -180,27 +180,48 @@ export default class BattleScene extends Phaser.Scene {
   // ──────────────────────────────────────────────────────────
   //  유닛 스프라이트 (이미지 기반)
   // ──────────────────────────────────────────────────────────
+
+  // 유닛 배치 전 이미지 키 사전 할당
+  // 같은 직업 아군이 여러 명일 때 다른 이미지 순환 배정
+  _assignCharKeys() {
+    const allyJobAlts = {
+      '기사':   ['char-기사', 'char-랄프'],     // 레온, 랄프
+      '마법사': ['char-마법사', 'char-티티'],    // 카린, 티티
+    };
+    const jobCount = {};
+    for (const unit of this.allies) {
+      const alts = allyJobAlts[unit.job];
+      if (alts) {
+        const idx = jobCount[unit.job] || 0;
+        unit.charKey = alts[idx % alts.length];
+        jobCount[unit.job] = idx + 1;
+      } else {
+        unit.charKey = `char-${unit.job}`;
+      }
+    }
+    for (const unit of this.enemies) {
+      unit.charKey = `enemy-${unit.job}`;
+    }
+  }
+
   _spawnUnitSprites() {
+    this._assignCharKeys();
     const allUnits = [...this.allies, ...this.enemies];
     for (const unit of allUnits) {
       this._createUnitSprite(unit);
     }
   }
 
-  // 직업 → 이미지 키 변환
-  _spriteKey(unit) {
-    const prefix = unit.team === TEAM.ALLY ? 'char' : 'enemy';
-    return `${prefix}-${unit.job}`;
-  }
-
   _createUnitSprite(unit) {
     const { px, py } = gridToPixel(unit.x, unit.y, CELL_SIZE);
     const barW    = CELL_SIZE - 14;
     const imgSize = CELL_SIZE - 8;
+    const isAlly  = unit.team === TEAM.ALLY;
 
-    // 캐릭터 이미지
-    const charImg = this.add.image(px, py - 2, this._spriteKey(unit))
-      .setDisplaySize(imgSize, imgSize);
+    // 캐릭터 이미지 (아군=우향, 적군=좌향)
+    const charImg = this.add.image(px, py - 2, unit.charKey)
+      .setDisplaySize(imgSize, imgSize)
+      .setFlipX(isAlly);  // 원본이 좌향 → 아군은 반전(우향), 적군은 그대로(좌향)
 
     // 레벨 텍스트 (좌상단)
     const lvTxt = this.add.text(

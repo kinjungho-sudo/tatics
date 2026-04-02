@@ -35,6 +35,13 @@ export default class BootScene extends Phaser.Scene {
       console.warn(`[Boot] 이미지 로딩 실패: ${file.key} (${file.url})`);
     });
 
+    // 지형 타일
+    this.load.image('tile-plain',    'tiles/plain.png');
+    this.load.image('tile-river',    'tiles/river.png');
+    this.load.image('tile-forest',   'tiles/forest.png');
+    this.load.image('tile-obstacle', 'tiles/obstacle.png');
+    this.load.image('tile-mountain', 'tiles/mountain.png');
+
     // 아군 캐릭터 (직업별)
     this.load.image('char-기사',   'sprites/characters/leon.png');
     this.load.image('char-마법사', 'sprites/characters/karin.png');

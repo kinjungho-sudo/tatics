@@ -17,6 +17,7 @@ import { TERRAIN }      from '../data/terrain.js';
 import { randomInt }    from '../utils/Random.js';
 import { StageProgress } from '../systems/StageProgress.js';
 import { saveSystem }   from '../systems/SaveSystem.js';
+import { soundSystem }  from '../systems/SoundSystem.js';
 import { stage01 }      from '../data/stages/stage01.js';
 import { stage02 }      from '../data/stages/stage02.js';
 import { stage03 }      from '../data/stages/stage03.js';
@@ -48,6 +49,8 @@ export default class BattleScene extends Phaser.Scene {
     // MapScene에서 전달된 stageId, 없으면 stage01
     this.stageId = data?.stageId || 'stage01';
     this.stageData = STAGE_MAP[this.stageId] || stage01;
+    // 저장된 아군 유닛 데이터 (레벨/경험치 복원용)
+    this.savedUnitData = data?.savedUnitData ?? [];
   }
 
   create() {
@@ -94,12 +97,13 @@ export default class BattleScene extends Phaser.Scene {
     this.turnSystem = new TurnSystem({
       onAllyTurnStart:  (turn) => {
         this.turnBadge.show('아군 턴', turn);
+        soundSystem.playAllyTurnStart();
         // acted=false 초기화 후 이미지 alpha 복원
         for (const a of this.allies) {
           if (a.hp > 0) this._refreshUnitActed(a);
         }
       },
-      onEnemyTurnStart: (turn) => this.turnBadge.show('적 턴', turn),
+      onEnemyTurnStart: (turn) => { this.turnBadge.show('적 턴', turn); soundSystem.playEnemyTurnStart(); },
       onTurnChanged:    (team, _turn) => {
         if (team === TEAM.ENEMY) this._runEnemyTurn();
       },
@@ -110,6 +114,9 @@ export default class BattleScene extends Phaser.Scene {
 
     // "턴 종료" 버튼
     this._createEndTurnButton();
+
+    // 전투 BGM 시작
+    soundSystem.playBattleBgm();
   }
 
   // ──────────────────────────────────────────────────────────
@@ -117,24 +124,44 @@ export default class BattleScene extends Phaser.Scene {
   // ──────────────────────────────────────────────────────────
   _createUnits(unitConfigs, team) {
     return unitConfigs.map((cfg) => {
-      const base   = JOB_BASE[cfg.job];
-      const lv     = cfg.lv || 1;
+      const base = JOB_BASE[cfg.job];
+      const maxMp = cfg.job === '마법사' ? 50 : cfg.job === '성직자' ? 40 : 30;
 
-      // lv>1 레벨 스케일링 (growthTable 기본값 × (lv-1))
+      // ── 아군: 저장된 레벨/스탯 복원 (name + job 기준 매칭) ──
+      if (team === TEAM.ALLY && this.savedUnitData.length > 0) {
+        const saved = this.savedUnitData.find(
+          u => u.name === cfg.name && u.job === cfg.job
+        );
+        if (saved) {
+          return {
+            id: cfg.id, name: cfg.name, job: cfg.job, team,
+            x: cfg.x, y: cfg.y,
+            lv:  saved.lv,
+            exp: saved.exp,
+            hp:    saved.maxHp,   // 전투 시작 시 HP 전체 회복
+            maxHp: saved.maxHp,
+            atk:  saved.atk, def: saved.def, spd: saved.spd,
+            move: saved.move ?? base.move,
+            range: saved.range ?? base.range,
+            mp: maxMp, maxMp,
+            acted: false,
+            sprite: null,
+          };
+        }
+      }
+
+      // ── 기본 생성 (저장 없거나 적군) ──
+      const lv = cfg.lv || 1;
       let hp = base.hp, maxHp = base.maxHp;
       let atk = base.atk, def = base.def, spd = base.spd;
       if (lv > 1) {
         const g = growthTable[cfg.job];
         if (g) {
-          const n  = lv - 1;
-          hp   += g.hp  * n;  maxHp += g.hp  * n;
-          atk  += g.atk * n;  def   += g.def * n;
-          spd  += g.spd * n;
+          const n = lv - 1;
+          hp += g.hp * n;  maxHp += g.hp * n;
+          atk += g.atk * n; def += g.def * n; spd += g.spd * n;
         }
       }
-
-      // 직업별 기본 MP (성직자·마법사는 높게)
-      const maxMp = cfg.job === '마법사' ? 50 : cfg.job === '성직자' ? 40 : 30;
 
       return {
         id: cfg.id, name: cfg.name, job: cfg.job, team,
@@ -151,9 +178,37 @@ export default class BattleScene extends Phaser.Scene {
   }
 
   // ──────────────────────────────────────────────────────────
-  //  맵 렌더링 (픽셀아트 SRPG 스타일)
+  //  맵 렌더링 (Kenney 픽셀아트 타일 이미지)
   // ──────────────────────────────────────────────────────────
   _drawMap() {
+    const S = CELL_SIZE;
+    const tileKey = { 0:'tile-plain', 1:'tile-obstacle', 2:'tile-forest', 3:'tile-river', 4:'tile-mountain' };
+    const grid = this.add.graphics();
+
+    for (let row = 0; row < MAP_ROWS; row++) {
+      for (let col = 0; col < MAP_COLS; col++) {
+        const type = this.mapData[row][col];
+        const cx   = col * S + S / 2;
+        const cy   = row * S + S / 2;
+        const key  = tileKey[type] ?? 'tile-plain';
+        const img  = this.add.image(cx, cy, key).setDisplaySize(S, S);
+        this.mapLayer.add(img);
+      }
+    }
+
+    // 얇은 그리드 선
+    grid.lineStyle(1, 0x000000, 0.18);
+    for (let row = 0; row <= MAP_ROWS; row++) {
+      grid.beginPath(); grid.moveTo(0, row*S); grid.lineTo(MAP_COLS*S, row*S); grid.strokePath();
+    }
+    for (let col = 0; col <= MAP_COLS; col++) {
+      grid.beginPath(); grid.moveTo(col*S, 0); grid.lineTo(col*S, MAP_ROWS*S); grid.strokePath();
+    }
+    this.mapLayer.add(grid);
+  }
+
+  // (구) Graphics 기반 드로잉 — 더 이상 사용 안 함, 삭제 예정
+  _drawMap_UNUSED() {
     const g = this.add.graphics();
     const S = CELL_SIZE;
 
@@ -511,6 +566,7 @@ export default class BattleScene extends Phaser.Scene {
 
     this.selectedUnit = unit;
     this.phase        = PHASE.SELECTED;
+    soundSystem.playSelect();
 
     // 이동 범위 계산 + 표시
     const allUnits = [...this.allies, ...this.enemies];
@@ -555,6 +611,7 @@ export default class BattleScene extends Phaser.Scene {
     }
 
     // 이동 실행
+    soundSystem.playMove();
     this._moveUnit(this.selectedUnit, col, row);
   }
 
@@ -617,7 +674,8 @@ export default class BattleScene extends Phaser.Scene {
     this._clearOverlay();
     this.orderPanel.hide();
 
-    // 힐 팝업
+    // 회복 사운드 + 팝업
+    soundSystem.playHeal();
     const { px, py } = gridToPixel(target.x, target.y, CELL_SIZE);
     this.damagePopup.showHeal(px, py, healAmt);
     this._updateUnitHpBar(target);
@@ -654,6 +712,15 @@ export default class BattleScene extends Phaser.Scene {
     this.orderPanel.hide();
     this._clearOverlay();
 
+    // 공격 사운드 (직업별 분기)
+    const job = attacker.job;
+    if (job === '마법사') soundSystem.playMagic();
+    else if (job === '궁수') soundSystem.playRangedShot();
+    else soundSystem.playSwordSlash();
+
+    // 피격 사운드
+    soundSystem.playHit();
+
     // 데미지 팝업 표시
     const { px: dx, py: dy } = gridToPixel(defender.x, defender.y, CELL_SIZE);
     this.damagePopup.show(dx, dy, result.damage, defender.team === TEAM.ALLY);
@@ -668,13 +735,14 @@ export default class BattleScene extends Phaser.Scene {
     this._updateUnitHpBar(attacker);
 
     // 처치 처리
-    if (result.killed) this._removeUnit(defender);
-    if (result.counterKilled) this._removeUnit(attacker);
+    if (result.killed)        { soundSystem.playDeath(); this._removeUnit(defender); }
+    if (result.counterKilled) { soundSystem.playDeath(); this._removeUnit(attacker); }
 
     // 경험치 획득
     const levelUps = this.expSystem.onAttackSuccess(attacker, result.killed);
     for (const ev of levelUps) {
       this.levelUpPopup.show(attacker, ev);
+      soundSystem.playLevelUp();
     }
 
     // 행동 완료
@@ -938,7 +1006,9 @@ export default class BattleScene extends Phaser.Scene {
 
   _showResult(win) {
     this.phase = PHASE.RESULT;
-    if (win) StageProgress.clearStage(this.stageId);
+    soundSystem.stopBgm();
+    if (win) { soundSystem.playVictory(); StageProgress.clearStage(this.stageId); }
+    else       soundSystem.playDefeat();
 
     // ── 전투 기록 + 유닛 레벨 Supabase 저장 ──
     const allySnapshot = this.allies.map(u => ({

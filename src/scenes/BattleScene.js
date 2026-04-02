@@ -146,33 +146,212 @@ export default class BattleScene extends Phaser.Scene {
   }
 
   // ──────────────────────────────────────────────────────────
-  //  맵 렌더링
+  //  맵 렌더링 (픽셀아트 SRPG 스타일)
   // ──────────────────────────────────────────────────────────
   _drawMap() {
-    const terrainColors = {
-      0: COLOR.TERRAIN_PLAIN,
-      1: COLOR.TERRAIN_OBSTACLE,
-      2: COLOR.TERRAIN_FOREST,
-      3: COLOR.TERRAIN_RIVER,
-      4: COLOR.TERRAIN_MOUNTAIN,
-    };
+    const g = this.add.graphics();
+    const S = CELL_SIZE;
 
     for (let row = 0; row < MAP_ROWS; row++) {
       for (let col = 0; col < MAP_COLS; col++) {
-        const type  = this.mapData[row][col];
-        const color = terrainColors[type] ?? 0x8BC34A;
-        const x     = col * CELL_SIZE;
-        const y     = row * CELL_SIZE;
+        const type = this.mapData[row][col];
+        const x    = col * S;
+        const y    = row * S;
+        // 셀 위치 기반 결정론적 변형값 (0~4)
+        const v = (col * 7 + row * 11) % 5;
 
-        const cell = this.add.rectangle(
-          x + CELL_SIZE / 2,
-          y + CELL_SIZE / 2,
-          CELL_SIZE - 1,
-          CELL_SIZE - 1,
-          color
-        );
-        cell.setStrokeStyle(1, 0x000000, 0.3);
-        this.mapLayer.add(cell);
+        this._drawTile(g, type, x, y, S, v);
+
+        // 그리드 선 (얇고 반투명)
+        g.lineStyle(1, 0x1a2a10, 0.22);
+        g.strokeRect(x, y, S, S);
+      }
+    }
+
+    this.mapLayer.add(g);
+  }
+
+  _drawTile(g, type, x, y, S, v) {
+    switch (type) {
+
+      // ── 평지 ─────────────────────────────────────────────
+      case 0: {
+        // 베이스 밝은 황록
+        g.fillStyle(0x8ABF44, 1);
+        g.fillRect(x, y, S, S);
+        // 상단 밝은 하이라이트 (빛 방향)
+        g.fillStyle(0xA2D455, 1);
+        g.fillRect(x, y, S, Math.floor(S * 0.32));
+        // 하단 그림자
+        g.fillStyle(0x6B9A30, 1);
+        g.fillRect(x, y + Math.floor(S * 0.78), S, Math.floor(S * 0.22));
+        // 풀 텍스처 (짧은 선)
+        const tufts = [
+          [0.18, 0.42], [0.38, 0.55], [0.62, 0.38],
+          [0.75, 0.62], [0.28, 0.72], [0.52, 0.68],
+        ];
+        g.lineStyle(1, 0x4E7A1A, 0.55);
+        tufts.slice(v, v + 3).forEach(([tx, ty]) => {
+          const bx = x + tx * S, by = y + ty * S;
+          g.beginPath(); g.moveTo(bx,     by); g.lineTo(bx - 2, by - 5); g.strokePath();
+          g.beginPath(); g.moveTo(bx + 4, by); g.lineTo(bx + 6, by - 5); g.strokePath();
+        });
+        break;
+      }
+
+      // ── 장애물 (바위) ─────────────────────────────────────
+      case 1: {
+        // 어두운 바닥
+        g.fillStyle(0x2E3A30, 1);
+        g.fillRect(x, y, S, S);
+        // 메인 바위 (큰 덩어리)
+        g.fillStyle(0x5C6B5A, 1);
+        g.fillPoints([
+          { x: x + S*0.12, y: y + S*0.88 },
+          { x: x + S*0.06, y: y + S*0.52 },
+          { x: x + S*0.22, y: y + S*0.18 },
+          { x: x + S*0.58, y: y + S*0.08 },
+          { x: x + S*0.88, y: y + S*0.28 },
+          { x: x + S*0.92, y: y + S*0.72 },
+          { x: x + S*0.65, y: y + S*0.92 },
+        ], true);
+        // 좌상단 밝은 면
+        g.fillStyle(0x8A9E88, 1);
+        g.fillPoints([
+          { x: x + S*0.22, y: y + S*0.18 },
+          { x: x + S*0.58, y: y + S*0.08 },
+          { x: x + S*0.52, y: y + S*0.32 },
+          { x: x + S*0.18, y: y + S*0.42 },
+        ], true);
+        // 정상 하이라이트
+        g.fillStyle(0xADC2AA, 1);
+        g.fillCircle(x + S*0.4, y + S*0.16, S*0.07);
+        // 우측 그림자 면
+        g.fillStyle(0x3A4838, 0.6);
+        g.fillPoints([
+          { x: x + S*0.58, y: y + S*0.08 },
+          { x: x + S*0.88, y: y + S*0.28 },
+          { x: x + S*0.72, y: y + S*0.55 },
+          { x: x + S*0.52, y: y + S*0.32 },
+        ], true);
+        // 작은 자갈
+        g.fillStyle(0x7A8C78, 1);
+        g.fillCircle(x + S*0.72, y + S*0.75, S*0.09);
+        g.fillStyle(0x9AAE98, 1);
+        g.fillCircle(x + S*0.70, y + S*0.73, S*0.05);
+        break;
+      }
+
+      // ── 숲 ──────────────────────────────────────────────
+      case 2: {
+        // 어두운 초록 바닥
+        g.fillStyle(0x2E6B22, 1);
+        g.fillRect(x, y, S, S);
+        g.fillStyle(0x1E4A16, 1);
+        g.fillRect(x, y + S*0.74, S, S*0.26);
+        // 나무 그림자 (바닥 타원)
+        g.fillStyle(0x1A3A12, 0.7);
+        g.fillEllipse(x + S*0.52, y + S*0.74, S*0.52, S*0.16);
+        // 나무 기둥
+        g.fillStyle(0x6D4C2E, 1);
+        g.fillRect(x + S*0.43, y + S*0.58, S*0.14, S*0.22);
+        // 기둥 하이라이트
+        g.fillStyle(0x8D6C4E, 1);
+        g.fillRect(x + S*0.43, y + S*0.58, S*0.05, S*0.22);
+        // 잎사귀 3레이어 (아래→위)
+        g.fillStyle(0x2E6B22, 1);
+        g.fillCircle(x + S*0.50, y + S*0.50, S*0.30);
+        g.fillStyle(0x4A9A32, 1);
+        g.fillCircle(x + S*0.50, y + S*0.40, S*0.26);
+        g.fillStyle(0x62B440, 1);
+        g.fillCircle(x + S*0.50, y + S*0.30, S*0.20);
+        // 밝은 하이라이트 (빛 방향)
+        g.fillStyle(0x88CC55, 0.85);
+        g.fillCircle(x + S*0.42, y + S*0.22, S*0.09);
+        g.fillStyle(0xAADD77, 0.5);
+        g.fillCircle(x + S*0.40, y + S*0.20, S*0.05);
+        break;
+      }
+
+      // ── 강 ──────────────────────────────────────────────
+      case 3: {
+        // 짙은 파랑 바닥
+        g.fillStyle(0x0D47A1, 1);
+        g.fillRect(x, y, S, S);
+        // 중간 파랑
+        g.fillStyle(0x1565C0, 1);
+        g.fillRect(x, y, S, S*0.65);
+        // 밝은 파랑 상단
+        g.fillStyle(0x1976D2, 1);
+        g.fillRect(x, y, S, S*0.38);
+        // 물결 라인 3줄
+        g.lineStyle(1.5, 0x42A5F5, 0.75);
+        for (let i = 0; i < 3; i++) {
+          const wy = y + S * (0.18 + i * 0.27 + (v % 2) * 0.07);
+          const ox = (v % 3) * S * 0.06; // 가로 위상 오프셋
+          g.beginPath();
+          g.moveTo(x + ox,          wy);
+          g.lineTo(x + S*0.28 + ox, wy - S*0.055);
+          g.lineTo(x + S*0.52 + ox, wy + S*0.04);
+          g.lineTo(x + S*0.76 + ox, wy - S*0.055);
+          g.lineTo(x + S + ox,      wy);
+          g.strokePath();
+        }
+        // 반짝이는 하이라이트 (흰 점선)
+        g.fillStyle(0xE3F2FD, 0.6);
+        g.fillRect(x + S*(0.15 + v*0.04), y + S*0.12, S*0.14, S*0.025);
+        g.fillRect(x + S*(0.50 + v*0.03), y + S*0.42, S*0.20, S*0.025);
+        break;
+      }
+
+      // ── 산 ──────────────────────────────────────────────
+      case 4: {
+        // 어두운 갈색 바닥
+        g.fillStyle(0x3E2723, 1);
+        g.fillRect(x, y, S, S);
+        // 바위 주 형태
+        g.fillStyle(0x6D4C41, 1);
+        g.fillPoints([
+          { x: x,          y: y + S       },
+          { x: x + S*0.08, y: y + S*0.42  },
+          { x: x + S*0.32, y: y + S*0.12  },
+          { x: x + S*0.62, y: y + S*0.06  },
+          { x: x + S*0.88, y: y + S*0.32  },
+          { x: x + S,      y: y + S       },
+        ], true);
+        // 좌측 밝은 면
+        g.fillStyle(0x8D6E63, 1);
+        g.fillPoints([
+          { x: x + S*0.08, y: y + S*0.42  },
+          { x: x + S*0.32, y: y + S*0.12  },
+          { x: x + S*0.48, y: y + S*0.28  },
+          { x: x + S*0.22, y: y + S*0.58  },
+        ], true);
+        // 정상 하이라이트
+        g.fillStyle(0xA1887F, 1);
+        g.fillPoints([
+          { x: x + S*0.32, y: y + S*0.12  },
+          { x: x + S*0.62, y: y + S*0.06  },
+          { x: x + S*0.56, y: y + S*0.28  },
+          { x: x + S*0.36, y: y + S*0.30  },
+        ], true);
+        // 우측 그림자
+        g.fillStyle(0x3E2723, 0.55);
+        g.fillPoints([
+          { x: x + S*0.62, y: y + S*0.06  },
+          { x: x + S*0.88, y: y + S*0.32  },
+          { x: x + S*0.72, y: y + S*0.60  },
+          { x: x + S*0.56, y: y + S*0.28  },
+        ], true);
+        // 눈 덮인 정상 (흰 점)
+        g.fillStyle(0xFFFFFF, 0.4);
+        g.fillCircle(x + S*0.46, y + S*0.12, S*0.06);
+        break;
+      }
+
+      default: {
+        g.fillStyle(0x8ABF44, 1);
+        g.fillRect(x, y, S, S);
       }
     }
   }

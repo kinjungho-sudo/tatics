@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>SRPG Prototype v2 — 물리 시뮬레이션</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0d0d1a; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; padding: 12px; font-family: 'Segoe UI', sans-serif; gap: 12px; }
+    #game-container canvas { display: block; border: 1px solid #334; border-radius: 4px; }
+    #sim-panel {
+      width: 240px; min-width: 240px; background: #111122; border: 1px solid #334466;
+      border-radius: 8px; padding: 10px; color: #ccc; font-size: 11px; line-height: 1.6;
+      max-height: 760px; overflow-y: auto;
+    }
+    #sim-panel h3 { color: #88aaff; font-size: 12px; margin-bottom: 6px; border-bottom: 1px solid #334; padding-bottom: 4px; }
+    #sim-panel .section { margin-bottom: 10px; }
+    #sim-panel .label { color: #7788aa; font-size: 10px; }
+    #sim-panel .val { color: #ffffff; font-weight: bold; }
+    #sim-panel .log-entry { padding: 2px 0; border-bottom: 1px solid #222233; font-size: 10px; }
+    #sim-panel .log-dmg { color: #ff8888; }
+    #sim-panel .log-heal { color: #88ff88; }
+    #sim-panel .log-move { color: #88aaff; }
+    #sim-panel .log-kill { color: #ffcc00; font-weight: bold; }
+    #sim-panel .log-sys  { color: #aaaaaa; font-style: italic; }
+    .preview-box { background: #1a1a33; border: 1px solid #445; border-radius: 6px; padding: 6px; margin: 4px 0; }
+    .atk-bar { height: 6px; background: #222; border-radius: 3px; margin: 3px 0; overflow: hidden; }
+    .atk-fill { height: 100%; background: linear-gradient(90deg, #ff4444, #ff8800); border-radius: 3px; transition: width 0.3s; }
+    .hp-bar { height: 5px; background: #330000; border-radius: 3px; margin: 2px 0; overflow: hidden; }
+    .hp-fill { height: 100%; border-radius: 3px; }
+    .turn-badge { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: 10px; font-weight: bold; margin: 1px 0; }
+    .turn-p { background: #223; color: #88aaff; border: 1px solid #335; }
+    .turn-e { background: #322; color: #ff8888; border: 1px solid #533; }
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; font-size: 10px; }
+  </style>
+</head>
+<body>
+<div id="game-container"></div>
+<div id="sim-panel">
+  <h3>🔬 시뮬레이션 패널</h3>
+  <div class="section" id="sp-phase">
+    <div class="label">현재 페이즈</div>
+    <div id="sp-phase-val" class="val">—</div>
+  </div>
+  <div class="section" id="sp-selected">
+    <div class="label">선택된 유닛</div>
+    <div id="sp-unit-name" class="val">—</div>
+    <div id="sp-unit-stats" class="stat-grid"></div>
+  </div>
+  <div class="section">
+    <div class="label">전투 미리보기</div>
+    <div id="sp-preview" class="preview-box" style="display:none"></div>
+  </div>
+  <div class="section">
+    <div class="label">행동 순서 (SPD)</div>
+    <div id="sp-order"></div>
+  </div>
+  <div class="section">
+    <div class="label">전장 현황</div>
+    <div id="sp-status"></div>
+  </div>
+  <h3 style="margin-top:8px">📋 전투 로그</h3>
+  <div id="sp-log"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+<script>
+// ============================================================
+//  SRPG PROTOTYPE v2 — CLAUDE.md 정식 스탯 적용
+//  물리 시뮬레이션 패널 연동
+// ============================================================
+
+const CELL  = 58;
+const COLS  = 14;
+const ROWS  = 10;
+const UI_H  = 110;
+const W     = COLS * CELL;   // 812
+const H     = ROWS * CELL + UI_H; // 690
+
+// ── 지형 ────────────────────────────────────────────────────
+const TERRAIN = {
+  PLAIN:  { id:0, name:'평지', cost:1, defBonus:0,  color:0x5a9a30, border:0x4a8a20 },
+  FOREST: { id:1, name:'숲',   cost:2, defBonus:10, color:0x2d6e1e, border:0x1e5010 },
+  MOUNT:  { id:2, name:'산',   cost:99,defBonus:20, color:0x888888, border:0x666666 },
+  WATER:  { id:3, name:'강',   cost:99,defBonus:-5, color:0x2860bb, border:0x1a4a99 },
+  FORT:   { id:4, name:'요새', cost:1, defBonus:30, color:0xaa8840, border:0x886620 },
+};
+const T = [TERRAIN.PLAIN, TERRAIN.FOREST, TERRAIN.MOUNT, TERRAIN.WATER, TERRAIN.FORT];
+
+// ── 맵 (14×10) ──────────────────────────────────────────────
+const MAP = [
+  [0,0,0,1,1,0,0,0,1,1,0,0,0,0],
+  [0,0,0,1,0,0,4,0,0,1,0,0,0,0],
+  [0,0,2,2,0,0,0,0,0,0,2,2,0,0],
+  [0,0,2,0,0,0,3,3,0,0,0,2,0,0],
+  [0,0,0,0,0,3,3,3,3,0,0,0,0,0],
+  [0,0,0,0,0,3,3,3,3,0,0,0,0,0],
+  [0,0,2,0,0,0,3,3,0,0,0,2,0,0],
+  [0,0,2,2,0,0,0,0,0,0,2,2,0,0],
+  [0,0,0,1,0,0,4,0,0,1,0,0,0,0],
+  [0,0,0,1,1,0,0,0,1,1,0,0,0,0],
+];
+
+// ── 유닛 정의 (CLAUDE.md 기준) ──────────────────────────────
+const DEFS = {
+  KNIGHT:  { name:'기사',   icon:'⚔', hp:100,atk:30,def:15,spd:8,  mov:3,range:1, color:0x3366cc, cls:'knight',  healer:false },
+  MAGE:    { name:'마법사', icon:'✦', hp:70, atk:45,def:5, spd:12, mov:2,range:2, color:0x9944dd, cls:'mage',    healer:false },
+  ARCHER:  { name:'궁수',   icon:'◎', hp:80, atk:25,def:10,spd:10, mov:3,range:3, color:0x229966, cls:'archer',  healer:false },
+  CLERIC:  { name:'성직자', icon:'✚', hp:75, atk:15,def:8, spd:9,  mov:2,range:1, color:0xddcc00, cls:'cleric',  healer:true  },
+  CAVALRY: { name:'기병',   icon:'♞', hp:90, atk:28,def:8, spd:11, mov:5,range:1, color:0x4488bb, cls:'cavalry', healer:false },
+  E_KNT:   { name:'흑기사', icon:'⚔', hp:100,atk:32,def:14,spd:7,  mov:3,range:1, color:0xcc2222, cls:'knight',  healer:false },
+  E_MAGE:  { name:'암흑술사',icon:'✦', hp:68, atk:44,def:4, spd:13, mov:2,range:2, color:0xaa2299, cls:'mage',    healer:false },
+  E_ARC:   { name:'저격수', icon:'◎', hp:78, atk:26,def:9, spd:10, mov:3,range:3, color:0xcc6622, cls:'archer',  healer:false },
+  E_CAV:   { name:'기갑병', icon:'♞', hp:92, atk:30,def:7, spd:12, mov:5,range:1, color:0xdd3333, cls:'cavalry', healer:false },
+};
+
+// 성장 테이블
+const GROWTH = {
+  knight:  { hp:8, atk:2, def:3, spd:0 },
+  mage:    { hp:4, atk:4, def:1, spd:1 },
+  archer:  { hp:5, atk:3, def:2, spd:1 },
+  cleric:  { hp:5, atk:1, def:2, spd:1 },
+  cavalry: { hp:6, atk:3, def:1, spd:1 },
+};
+
+// ── 초기 배치 ───────────────────────────────────────────────
+const P_INIT = [
+  { type:'KNIGHT',  col:1, row:3 },
+  { type:'KNIGHT',  col:1, row:6 },
+  { type:'MAGE',    col:0, row:2 },
+  { type:'ARCHER',  col:0, row:5 },
+  { type:'CLERIC',  col:0, row:4 },
+  { type:'CAVALRY', col:1, row:8 },
+];
+const E_INIT = [
+  { type:'E_KNT', col:12, row:3 },
+  { type:'E_KNT', col:12, row:6 },
+  { type:'E_MAGE',col:13, row:4 },
+  { type:'E_ARC', col:13, row:2 },
+  { type:'E_CAV', col:12, row:8 },
+];
+
+// ── 전역 로그 ───────────────────────────────────────────────
+const battleLog = [];
+function addLog(msg, cls = 'log-sys') {
+  battleLog.unshift({ msg, cls });
+  if (battleLog.length > 60) battleLog.pop();
+  renderLog();
+}
+function renderLog() {
+  const el = document.getElementById('sp-log');
+  if (!el) return;
+  el.innerHTML = battleLog.slice(0, 30).map(e =>
+    `<div class="log-entry ${e.cls}">${e.msg}</div>`
+  ).join('');
+}
+
+// ============================================================
+// BATTLE SCENE
+// ============================================================
+class BattleScene extends Phaser.Scene {
+  constructor() { super({ key: 'BattleScene' }); }
+
+  create() {
+    this.state    = 'IDLE';   // IDLE|SELECTED|MOVE|ATTACK|ENEMY_TURN|GAMEOVER
+    this.phase    = 'PLAYER';
+    this.turn     = 1;
+    this.selUnit  = null;
+    this.unitMoved    = false;
+    this.unitAttacked = false;
+    this.moveRange   = [];
+    this.atkRange    = [];
+    this.units       = [];
+
+    // 레이어
+    this.gfxTerrain = this.add.graphics();
+    this.gfxRange   = this.add.graphics();
+    this.gfxSel     = this.add.graphics();
+    this.layerUnit  = this.add.container(0,0);
+    this.layerUI    = this.add.graphics();
+    this.layerMenu  = this.add.container(0,0);
+    this.layerText  = this.add.container(0,0);
+
+    this.drawTerrain();
+    this.spawnUnits();
+    this.buildUI();
+
+    this.input.on('pointerdown', this.onPointerDown, this);
+    this.input.on('pointermove', this.onPointerMove, this);
+
+    this.updateSimPanel();
+    addLog(`── 턴 ${this.turn} 시작 (플레이어)`, 'log-sys');
+  }
+
+  // ── 지형 ────────────────────────────────────────────────
+  drawTerrain() {
+    const g = this.gfxTerrain;
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const t = T[MAP[r][c]];
+        const x = c*CELL, y = r*CELL;
+        g.fillStyle(t.color); g.fillRect(x+1,y+1,CELL-2,CELL-2);
+        g.lineStyle(0.8, t.border, 0.7); g.strokeRect(x+.5,y+.5,CELL-1,CELL-1);
+        // 요새 마크
+        if (t.id === 4) {
+          g.lineStyle(1.5, 0xffd700, 0.6);
+          g.strokeRect(x+6,y+6,CELL-12,CELL-12);
+        }
+      }
+    }
+    // 그리드 오버레이
+    g.lineStyle(0.5, 0x000000, 0.18);
+    for (let c=0;c<=COLS;c++) g.lineBetween(c*CELL,0,c*CELL,ROWS*CELL);
+    for (let r=0;r<=ROWS;r++) g.lineBetween(0,r*CELL,COLS*CELL,r*CELL);
+  }
+
+  // ── 유닛 생성 ───────────────────────────────────────────
+  spawnUnits() {
+    let uid = 0;
+    const make = (type, col, row, side) => {
+      const d = DEFS[type];
+      const u = {
+        id: uid++, type, col, row, side,
+        name: d.name, icon: d.icon, cls: d.cls, healer: d.healer,
+        lv: 1, exp: 0,
+        hp: d.hp, maxHp: d.hp,
+        atk: d.atk, def: d.def, spd: d.spd, mov: d.mov, range: d.range,
+        color: d.color,
+        alive: true, acted: false,
+        container: null, hpBarGfx: null, bgGfx: null,
+      };
+      u.container = this.makeSprite(u);
+      this.layerUnit.add(u.container);
+      this.units.push(u);
+    };
+    P_INIT.forEach(({type,col,row}) => make(type,col,row,'player'));
+    E_INIT.forEach(({type,col,row}) => make(type,col,row,'enemy'));
+    this.positionUnits();
+  }
+
+  makeSprite(u) {
+    const con = this.add.container(0,0);
+    const r = CELL/2 - 5;
+
+    const bg = this.add.graphics();
+    bg.fillStyle(u.color); bg.fillCircle(CELL/2,CELL/2,r);
+    bg.lineStyle(2.5, u.side==='player' ? 0xaaccff : 0xffaaaa, 0.9);
+    bg.strokeCircle(CELL/2,CELL/2,r);
+    con.add(bg); u.bgGfx = bg;
+
+    const ico = this.add.text(CELL/2, CELL/2-2, u.icon, {fontSize:'18px',color:'#fff'}).setOrigin(0.5,0.5);
+    con.add(ico);
+
+    const nm = this.add.text(CELL/2, CELL-9, u.name, {
+      fontSize:'7.5px', color:'#fff', stroke:'#000', strokeThickness:2
+    }).setOrigin(0.5,0.5);
+    con.add(nm);
+
+    // HP 배경
+    const hpBg = this.add.graphics();
+    hpBg.fillStyle(0x220000); hpBg.fillRect(4,CELL-5,CELL-8,4);
+    con.add(hpBg);
+
+    // HP 바
+    const hpBar = this.add.graphics();
+    con.add(hpBar); u.hpBarGfx = hpBar;
+
+    // LV 표시
+    const lv = this.add.text(4, 2, `Lv${u.lv}`, {
+      fontSize:'7px', color:'#ffdd88', stroke:'#000', strokeThickness:1
+    });
+    con.add(lv); u.lvText = lv;
+
+    this.redrawHP(u);
+    return con;
+  }
+
+  redrawHP(u) {
+    if (!u.hpBarGfx) return;
+    u.hpBarGfx.clear();
+    const ratio = Math.max(0, u.hp / u.maxHp);
+    const color = ratio > 0.5 ? 0x33dd33 : ratio > 0.25 ? 0xddcc00 : 0xdd2222;
+    u.hpBarGfx.fillStyle(color);
+    u.hpBarGfx.fillRect(4, CELL-5, Math.round((CELL-8)*ratio), 4);
+  }
+
+  positionUnits() {
+    this.units.filter(u=>u.alive).forEach(u => {
+      u.container.setPosition(u.col*CELL, u.row*CELL);
+      u.bgGfx.setAlpha(u.acted ? 0.45 : 1);
+      this.redrawHP(u);
+    });
+  }
+
+  // ── 유틸 ────────────────────────────────────────────────
+  unitAt(col,row) {
+    return this.units.find(u=>u.alive && u.col===col && u.row===row) || null;
+  }
+
+  // ── BFS 이동 범위 ────────────────────────────────────────
+  calcMove(unit) {
+    const vis = new Map();
+    const q = [{col:unit.col, row:unit.row, cost:0}];
+    vis.set(`${unit.col},${unit.row}`, 0);
+    const res = [];
+    while (q.length) {
+      const {col,row,cost} = q.shift();
+      if (cost > 0) res.push({col,row});
+      for (const [dc,dr] of [[0,1],[0,-1],[1,0],[-1,0]]) {
+        const nc=col+dc, nr=row+dr;
+        if (nc<0||nc>=COLS||nr<0||nr>=ROWS) continue;
+        const terr = T[MAP[nr][nc]];
+        if (terr.cost >= 99) continue;
+        const nc2 = cost + terr.cost;
+        if (nc2 > unit.mov) continue;
+        const key = `${nc},${nr}`;
+        if (vis.has(key) && vis.get(key) <= nc2) continue;
+        const occ = this.unitAt(nc,nr);
+        if (occ && occ.side !== unit.side) continue;
+        vis.set(key, nc2);
+        q.push({col:nc, row:nr, cost:nc2});
+      }
+    }
+    return res.filter(({col,row}) => {
+      const occ = this.unitAt(col,row);
+      return !occ || occ === unit;
+    });
+  }
+
+  // ── 공격 범위 (맨해튼) ───────────────────────────────────
+  calcAtk(col, row, range) {
+    const cells = [];
+    for (let dc=-range; dc<=range; dc++) {
+      for (let dr=-range; dr<=range; dr++) {
+        const d = Math.abs(dc)+Math.abs(dr);
+        if (d<1||d>range) continue;
+        const nc=col+dc, nr=row+dr;
+        if (nc>=0&&nc<COLS&&nr>=0&&nr<ROWS) cells.push({col:nc,row:nr});
+      }
+    }
+    return cells;
+  }
+
+  // ── 데미지 공식 (CLAUDE.md) ──────────────────────────────
+  calcDmg(atk, def) {
+    const base = Math.max(1, atk - def);
+    return base + Math.floor(Math.random() * 6); // +random(0,5)
+  }
+
+  // ── 범위 렌더 ────────────────────────────────────────────
+  drawRanges() {
+    const g = this.gfxRange;
+    g.clear();
+    this.moveRange.forEach(({col,row}) => {
+      g.fillStyle(0x4488ff, 0.3); g.fillRect(col*CELL+1,row*CELL+1,CELL-2,CELL-2);
+      g.lineStyle(1.5,0x4488ff,0.7); g.strokeRect(col*CELL+1,row*CELL+1,CELL-2,CELL-2);
+    });
+    this.atkRange.forEach(({col,row}) => {
+      g.fillStyle(0xff3333, 0.22); g.fillRect(col*CELL+1,row*CELL+1,CELL-2,CELL-2);
+      g.lineStyle(1.5,0xff3333,0.6); g.strokeRect(col*CELL+1,row*CELL+1,CELL-2,CELL-2);
+    });
+    if (this.selUnit) {
+      const u = this.selUnit;
+      g.lineStyle(3,0xffee00,1);
+      g.strokeRect(u.col*CELL+1,u.row*CELL+1,CELL-2,CELL-2);
+    }
+  }
+
+  // ── 입력 처리 ────────────────────────────────────────────
+  onPointerDown(ptr) {
+    if (this.state==='GAMEOVER'||this.state==='ENEMY_TURN') return;
+    const col=Math.floor(ptr.x/CELL), row=Math.floor(ptr.y/CELL);
+    if (row>=ROWS) return;
+
+    if      (this.state==='IDLE'||this.state==='SELECTED') this.onGridClick(col,row);
+    else if (this.state==='MOVE')   this.onMoveClick(col,row);
+    else if (this.state==='ATTACK') this.onAtkClick(col,row);
+  }
+
+  onPointerMove(ptr) {
+    if (this.state!=='ATTACK') { this.hidePreview(); return; }
+    const col=Math.floor(ptr.x/CELL), row=Math.floor(ptr.y/CELL);
+    if (row>=ROWS) { this.hidePreview(); return; }
+    const inAtk = this.atkRange.some(c=>c.col===col&&c.row===row);
+    const target = this.unitAt(col,row);
+    if (inAtk && target && target.side==='enemy' && !this.selUnit.healer) {
+      this.showCombatPreview(this.selUnit, target);
+    } else {
+      this.hidePreview();
+    }
+  }
+
+  onGridClick(col,row) {
+    const u = this.unitAt(col,row);
+    if (u && u.side==='player' && !u.acted) {
+      this.selectUnit(u);
+    } else {
+      this.clearSel();
+    }
+  }
+
+  selectUnit(u) {
+    this.selUnit = u;
+    this.unitMoved = false;
+    this.unitAttacked = false;
+    this.state = 'SELECTED';
+    this.moveRange = []; this.atkRange = [];
+    this.drawRanges();
+    this.buildMenu(u);
+    this.updateSimUnit(u);
+    addLog(`선택: ${u.name} (${u.col},${u.row})`, 'log-sys');
+  }
+
+  clearSel() {
+    this.selUnit = null;
+    this.state = 'IDLE';
+    this.moveRange = []; this.atkRange = [];
+    this.drawRanges();
+    this.buildMenu(null);
+    this.clearSimUnit();
+    this.hidePreview();
+  }
+
+  // ── 이동 ────────────────────────────────────────────────
+  startMove() {
+    if (!this.selUnit || this.unitMoved) return;
+    this.state = 'MOVE';
+    this.moveRange = this.calcMove(this.selUnit);
+    this.atkRange = [];
+    this.drawRanges();
+  }
+
+  onMoveClick(col,row) {
+    const ok = this.moveRange.some(c=>c.col===col&&c.row===row);
+    if (ok) {
+      const u = this.selUnit;
+      addLog(`이동: ${u.name} (${u.col},${u.row})→(${col},${row})`, 'log-move');
+      u.col=col; u.row=row;
+      this.unitMoved = true;
+    }
+    this.state = 'SELECTED';
+    this.moveRange = []; this.atkRange = [];
+    this.positionUnits();
+    this.drawRanges();
+    this.buildMenu(this.selUnit);
+    this.updateSimPanel();
+  }
+
+  // ── 공격 ────────────────────────────────────────────────
+  startAtk() {
+    if (!this.selUnit || this.unitAttacked) return;
+    this.state = 'ATTACK';
+    this.moveRange = [];
+    this.atkRange = this.calcAtk(this.selUnit.col, this.selUnit.row, this.selUnit.range);
+    this.drawRanges();
+  }
+
+  onAtkClick(col,row) {
+    const inAtk = this.atkRange.some(c=>c.col===col&&c.row===row);
+    const target = this.unitAt(col,row);
+    const u = this.selUnit;
+    this.hidePreview();
+
+    if (inAtk && target) {
+      if (u.healer && target.side==='player') {
+        this.doHeal(u, target);
+        this.unitAttacked = true;
+      } else if (!u.healer && target.side==='enemy') {
+        this.doCombat(u, target);
+        this.unitAttacked = true;
+      }
+    }
+
+    this.state = 'SELECTED';
+    this.atkRange = [];
+    this.drawRanges();
+    if (this.selUnit) this.buildMenu(this.selUnit);
+    this.checkWinLose();
+    this.updateSimPanel();
+  }
+
+  // ── 전투 로직 ────────────────────────────────────────────
+  doCombat(atk, def) {
+    const dmg = this.calcDmg(atk.atk, def.def);
+    def.hp = Math.max(0, def.hp - dmg);
+    this.redrawHP(def);
+    this.floatText(def.col,def.row,`-${dmg}`,0xff4444);
+    addLog(`${atk.name} → ${def.name}: ${dmg}dmg (HP:${def.hp}/${def.maxHp})`, 'log-dmg');
+
+    // EXP
+    this.addExp(atk, 5);
+
+    if (def.hp === 0) {
+      this.addExp(atk, 15);
+      this.killUnit(def);
+      return;
+    }
+
+    // 반격 (근거리 vs 근거리)
+    if (def.range===1 && atk.range===1) {
+      const cdmg = this.calcDmg(def.atk, atk.def);
+      atk.hp = Math.max(0, atk.hp - cdmg);
+      this.redrawHP(atk);
+      this.floatText(atk.col,atk.row,`-${cdmg}`,0xffaa00);
+      addLog(`↩ 반격: ${def.name} → ${atk.name}: ${cdmg}dmg`, 'log-dmg');
+      if (atk.hp === 0) this.killUnit(atk);
+    }
+  }
+
+  doHeal(healer, target) {
+    const amt = Math.max(10, healer.atk * 2) + Math.floor(Math.random()*5);
+    const actual = Math.min(amt, target.maxHp - target.hp);
+    target.hp = Math.min(target.maxHp, target.hp + amt);
+    this.redrawHP(target);
+    this.floatText(target.col,target.row,`+${actual}`,0x44ff88);
+    addLog(`${healer.name} 회복: ${target.name} +${actual}HP`, 'log-heal');
+    this.addExp(healer, 5);
+  }
+
+  killUnit(u) {
+    u.alive = false; u.acted = true;
+    addLog(`★ ${u.name} 전사!`, 'log-kill');
+    this.tweens.add({
+      targets: u.container, alpha:0, scaleX:0.2, scaleY:0.2, angle:90,
+      duration:500, ease:'Power2',
+      onComplete: () => u.container.destroy()
+    });
+    if (u === this.selUnit) this.clearSel();
+  }
+
+  // ── EXP / 레벨업 ────────────────────────────────────────
+  addExp(u, amount) {
+    if (!u.alive) return;
+    u.exp += amount;
+    const needed = u.lv * 20;
+    if (u.exp >= needed) {
+      u.exp -= needed;
+      this.levelUp(u);
+    }
+  }
+
+  levelUp(u) {
+    u.lv++;
+    const g = GROWTH[u.cls] || GROWTH.knight;
+    u.maxHp += g.hp + (Math.random()<0.5?1:0);
+    u.hp    = u.maxHp;
+    u.atk   += g.atk + (Math.random()<0.5?1:0);
+    u.def   += g.def + (Math.random()<0.5?1:0);
+    u.spd   += g.spd + (Math.random()<0.5?1:0);
+    u.lvText?.setText(`Lv${u.lv}`);
+    this.redrawHP(u);
+    this.floatText(u.col, u.row, `LV UP!`, 0xffee00);
+    addLog(`🌟 레벨업! ${u.name} → Lv${u.lv}`, 'log-kill');
+    this.updateSimPanel();
+  }
+
+  floatText(col,row,msg,color) {
+    const x=col*CELL+CELL/2, y=row*CELL+CELL/2;
+    const t=this.add.text(x,y,msg,{
+      fontSize:'18px',fontStyle:'bold',
+      color:'#'+color.toString(16).padStart(6,'0'),
+      stroke:'#000',strokeThickness:3
+    }).setOrigin(0.5,0.5).setDepth(200);
+    this.tweens.add({targets:t, y:y-44,alpha:0,duration:900,ease:'Power1',onComplete:()=>t.destroy()});
+  }
+
+  // ── 대기 ────────────────────────────────────────────────
+  waitUnit() {
+    if (!this.selUnit) return;
+    this.selUnit.acted = true;
+    addLog(`대기: ${this.selUnit.name}`, 'log-sys');
+    this.positionUnits();
+    this.clearSel();
+    this.checkAutoEnd();
+  }
+
+  checkAutoEnd() {
+    const left = this.units.filter(u=>u.alive&&u.side==='player'&&!u.acted);
+    if (left.length===0) this.time.delayedCall(400,()=>this.endPlayerTurn());
+  }
+
+  // ── 턴 종료 ──────────────────────────────────────────────
+  endPlayerTurn() {
+    if (this.state==='GAMEOVER'||this.state==='ENEMY_TURN') return;
+    this.clearSel();
+    this.phase = 'ENEMY'; this.state = 'ENEMY_TURN';
+    this.units.forEach(u=>{if(u.alive)u.acted=false;});
+    addLog(`── 적 턴 ${this.turn}`, 'log-sys');
+    this.buildMenu(null);
+    this.updateSimPanel();
+    this.time.delayedCall(400,()=>this.runAI());
+  }
+
+  // ── AI (SPD 순) ──────────────────────────────────────────
+  runAI() {
+    const enemies = this.units
+      .filter(u=>u.alive&&u.side==='enemy'&&!u.acted)
+      .sort((a,b)=>b.spd-a.spd);
+
+    if (!enemies.length) { this.endEnemyTurn(); return; }
+
+    const e = enemies[0];
+    this.selUnit = e; this.drawRanges();
+
+    this.time.delayedCall(250, () => {
+      this.aiAct(e, () => {
+        e.acted = true;
+        this.selUnit = null; this.drawRanges();
+        this.positionUnits();
+        this.checkWinLose();
+        if (this.state !== 'GAMEOVER') {
+          this.time.delayedCall(150, () => this.runAI());
+        }
+      });
+    });
+  }
+
+  aiAct(e, done) {
+    const players = this.units.filter(u=>u.alive&&u.side==='player');
+    if (!players.length) { done(); return; }
+
+    // 가장 가까운 아군 (낮은 HP 우선)
+    const target = players.reduce((best,p) => {
+      const d = Math.abs(p.col-e.col)+Math.abs(p.row-e.row);
+      const bd = Math.abs(best.col-e.col)+Math.abs(best.row-e.row);
+      if (d<bd) return p;
+      if (d===bd && p.hp<best.hp) return p;
+      return best;
+    });
+
+    const curAtk = this.calcAtk(e.col,e.row,e.range);
+    if (curAtk.some(c=>c.col===target.col&&c.row===target.row)) {
+      this.doCombat(e,target); done(); return;
+    }
+
+    // 이동
+    const moveRng = this.calcMove(e);
+    let bestMove = null, bestScore = Infinity;
+    for (const mc of moveRng) {
+      const afterAtk = this.calcAtk(mc.col,mc.row,e.range);
+      const canAtk = afterAtk.some(c=>c.col===target.col&&c.row===target.row);
+      const dist = Math.abs(mc.col-target.col)+Math.abs(mc.row-target.row);
+      const score = canAtk ? -1000 + dist : dist;
+      if (score < bestScore) { bestScore=score; bestMove=mc; }
+    }
+
+    if (bestMove) {
+      addLog(`이동: ${e.name} (${e.col},${e.row})→(${bestMove.col},${bestMove.row})`, 'log-move');
+      e.col=bestMove.col; e.row=bestMove.row;
+      this.positionUnits();
+    }
+
+    this.time.delayedCall(200, () => {
+      const newAtk = this.calcAtk(e.col,e.row,e.range);
+      if (newAtk.some(c=>c.col===target.col&&c.row===target.row)) {
+        this.doCombat(e,target);
+      }
+      done();
+    });
+  }
+
+  endEnemyTurn() {
+    if (this.state==='GAMEOVER') return;
+    this.phase='PLAYER'; this.state='IDLE';
+    this.turn++;
+    this.units.forEach(u=>{if(u.alive)u.acted=false;});
+    this.positionUnits();
+    this.buildMenu(null);
+    this.updateSimPanel();
+    addLog(`── 턴 ${this.turn} 시작 (플레이어)`, 'log-sys');
+  }
+
+  // ── 승패 ────────────────────────────────────────────────
+  checkWinLose() {
+    const pa = this.units.filter(u=>u.alive&&u.side==='player').length;
+    const ea = this.units.filter(u=>u.alive&&u.side==='enemy').length;
+    if (pa===0) this.gameOver(false);
+    else if (ea===0) this.gameOver(true);
+  }
+
+  gameOver(win) {
+    this.state='GAMEOVER';
+    this.buildMenu(null);
+    const ov=this.add.graphics();
+    ov.fillStyle(0x000000,0.65); ov.fillRect(0,0,W,H);
+    const color=win?'#ffdd00':'#ff4444';
+    this.add.text(W/2,H/2-30,win?'승리!':'패배...',{
+      fontSize:'56px',fontStyle:'bold',color,stroke:'#000',strokeThickness:6
+    }).setOrigin(0.5,0.5).setDepth(300);
+    this.add.text(W/2,H/2+35,'F5로 재시작',{fontSize:'18px',color:'#ccc'}).setOrigin(0.5,0.5).setDepth(300);
+    addLog(win?'★★★ 승리! ★★★':'✕✕✕ 패배... ✕✕✕','log-kill');
+  }
+
+  // ── 시뮬레이션 패널 ─────────────────────────────────────
+  showCombatPreview(atk, def) {
+    const minDmg = Math.max(1, atk.atk - def.def);
+    const maxDmg = minDmg + 5;
+    const hpAfterMin = Math.max(0, def.hp - maxDmg);
+    const hpAfterMax = Math.max(0, def.hp - minDmg);
+    // 반격
+    let cMin=0, cMax=0;
+    const canCounter = (def.range===1 && atk.range===1 && def.hp>0);
+    if (canCounter) {
+      cMin = Math.max(1, def.atk - atk.def);
+      cMax = cMin + 5;
+    }
+    const el = document.getElementById('sp-preview');
+    if (!el) return;
+    const hpRatio = def.hp / def.maxHp;
+    const hpCol = hpRatio>0.5?'#33dd33':hpRatio>0.25?'#ddcc00':'#dd2222';
+    el.style.display = 'block';
+    el.innerHTML = `
+      <div style="color:#ff8888;font-weight:bold;margin-bottom:4px">⚔ 전투 시뮬레이션</div>
+      <div style="color:#aaa;font-size:10px">${atk.name} → ${def.name}</div>
+      <div class="atk-bar"><div class="atk-fill" style="width:${Math.min(100,(maxDmg/def.hp*100))}%"></div></div>
+      <div style="font-size:10px">예상 데미지: <span style="color:#ff8888">${minDmg}~${maxDmg}</span></div>
+      <div style="font-size:10px">적 HP: <span style="color:${hpCol}">${def.hp}</span> → ${hpAfterMin}~${hpAfterMax}</div>
+      <div class="hp-bar"><div class="hp-fill" style="width:${hpRatio*100}%;background:${hpCol}"></div></div>
+      ${canCounter ? `<div style="color:#ffaa00;font-size:10px;margin-top:4px">↩ 반격: ${cMin}~${cMax}dmg</div>` : ''}
+      ${maxDmg>=def.hp ? '<div style="color:#ffee00;font-size:10px;font-weight:bold">💀 치명타 가능!</div>' : ''}
+    `;
+  }
+
+  hidePreview() {
+    const el = document.getElementById('sp-preview');
+    if (el) el.style.display = 'none';
+  }
+
+  updateSimUnit(u) {
+    const nm = document.getElementById('sp-unit-name');
+    const st = document.getElementById('sp-unit-stats');
+    if (!nm||!st||!u) return;
+    nm.textContent = u ? `${u.name} (Lv${u.lv})` : '—';
+    if (u) {
+      const hpRatio = u.hp/u.maxHp;
+      const hpCol = hpRatio>0.5?'#33dd33':hpRatio>0.25?'#ddcc00':'#dd2222';
+      st.innerHTML = `
+        <div><span class="label">HP</span> <span style="color:${hpCol}">${u.hp}/${u.maxHp}</span></div>
+        <div><span class="label">EXP</span> <span class="val">${u.exp}/${u.lv*20}</span></div>
+        <div><span class="label">ATK</span> <span class="val">${u.atk}</span></div>
+        <div><span class="label">DEF</span> <span class="val">${u.def}</span></div>
+        <div><span class="label">SPD</span> <span class="val">${u.spd}</span></div>
+        <div><span class="label">MOV</span> <span class="val">${u.mov}</span></div>
+        <div><span class="label">RNG</span> <span class="val">${u.range}</span></div>
+        <div><span class="label">위치</span> <span class="val">${u.col},${u.row}</span></div>
+      `;
+    }
+  }
+
+  clearSimUnit() {
+    const nm=document.getElementById('sp-unit-name');
+    const st=document.getElementById('sp-unit-stats');
+    if(nm) nm.textContent='—';
+    if(st) st.innerHTML='';
+  }
+
+  updateSimPanel() {
+    // 페이즈
+    const ph=document.getElementById('sp-phase-val');
+    if(ph) {
+      const isP=this.phase==='PLAYER';
+      ph.innerHTML=`<span class="turn-badge ${isP?'turn-p':'turn-e'}">${isP?'▶ 플레이어':'▶ 적'} 턴 ${this.turn}</span>`;
+    }
+    // 행동 순서 (SPD)
+    const ord=document.getElementById('sp-order');
+    if(ord) {
+      const alive=this.units.filter(u=>u.alive).sort((a,b)=>b.spd-a.spd);
+      ord.innerHTML = alive.slice(0,8).map(u=>`
+        <div style="display:flex;align-items:center;gap:4px;padding:1px 0;border-bottom:1px solid #222">
+          <span style="color:${u.side==='player'?'#88aaff':'#ff8888'};font-size:11px">${u.icon}</span>
+          <span style="font-size:10px;flex:1">${u.name}</span>
+          <span style="font-size:9px;color:#888">SPD${u.spd}</span>
+          ${u.acted?'<span style="font-size:9px;color:#555">✓</span>':''}
+        </div>
+      `).join('');
+    }
+    // 전황
+    const pa=this.units.filter(u=>u.alive&&u.side==='player').length;
+    const ea=this.units.filter(u=>u.alive&&u.side==='enemy').length;
+    const st=document.getElementById('sp-status');
+    if(st) st.innerHTML=`
+      <div style="display:flex;gap:8px">
+        <span style="color:#88aaff">아군: ${pa}명</span>
+        <span style="color:#ff8888">적군: ${ea}명</span>
+      </div>
+    `;
+  }
+
+  // ── UI 패널 ────────────────────────────────────────────
+  buildUI() {
+    const g=this.layerUI;
+    const y=ROWS*CELL;
+    g.fillStyle(0x0d0d1e); g.fillRect(0,y,W,UI_H);
+    g.lineStyle(1.5,0x334466); g.lineBetween(0,y,W,y);
+
+    this.phTxt=this.add.text(W/2,y+6,'',{fontSize:'13px',fontStyle:'bold',color:'#88aaff'}).setOrigin(0.5,0);
+    this.infoTxt=this.add.text(W/2,y+26,'',{fontSize:'11px',color:'#aaaacc',align:'center'}).setOrigin(0.5,0);
+    this.layerText.add([this.phTxt,this.infoTxt]);
+
+    this.buildMenu(null);
+  }
+
+  buildMenu(u) {
+    this.layerMenu.removeAll(true);
+    const y=ROWS*CELL+55;
+    const makeBt=(lbl,i,on,cb,col=0x224488,hov=0x3366cc)=>{
+      const bw=88,bh=34,gap=6;
+      const x=8+i*(bw+gap);
+      const g=this.add.graphics();
+      g.fillStyle(on?col:0x2a2a2a); g.fillRoundedRect(0,0,bw,bh,5);
+      g.lineStyle(1,on?0x88aaff:0x444,1); g.strokeRoundedRect(0,0,bw,bh,5);
+      g.setPosition(x,y);
+      const t=this.add.text(x+bw/2,y+bh/2,lbl,{
+        fontSize:'12px',fontStyle:'bold',color:on?'#fff':'#666'
+      }).setOrigin(0.5,0.5);
+      if(on){
+        g.setInteractive(new Phaser.Geom.Rectangle(0,0,bw,bh),Phaser.Geom.Rectangle.Contains);
+        g.on('pointerover',()=>{g.clear();g.fillStyle(hov);g.fillRoundedRect(0,0,bw,bh,5);g.lineStyle(1,0xaaccff);g.strokeRoundedRect(0,0,bw,bh,5);});
+        g.on('pointerout', ()=>{g.clear();g.fillStyle(col);g.fillRoundedRect(0,0,bw,bh,5);g.lineStyle(1,0x88aaff);g.strokeRoundedRect(0,0,bw,bh,5);});
+        g.on('pointerdown',cb);
+      }
+      this.layerMenu.add([g,t]);
+    };
+
+    const phase=this.phase==='PLAYER';
+    this.phTxt.setText(`턴 ${this.turn}   ${phase?'▶ 플레이어 턴':'▶ 적 턴'}`);
+    this.phTxt.setColor(phase?'#88aaff':'#ff8888');
+
+    if (u && !u.acted && this.phase==='PLAYER') {
+      makeBt('이동',     0, !this.unitMoved,    ()=>this.startMove());
+      makeBt(u.healer?'회복':'공격', 1, !this.unitAttacked, ()=>this.startAtk(), 0x882222, 0xaa3333);
+      makeBt('대기',     2, true,               ()=>this.waitUnit(), 0x224422, 0x336633);
+      makeBt('취소',     3, true,               ()=>this.clearSel(), 0x333322, 0x555533);
+    }
+
+    if (this.phase==='PLAYER' && this.state!=='ENEMY_TURN') {
+      const bw=88,bh=34;
+      const ex=W-bw-8, ey=y;
+      const g=this.add.graphics();
+      g.fillStyle(0x882222); g.fillRoundedRect(0,0,bw,bh,5);
+      g.lineStyle(1,0xff6666); g.strokeRoundedRect(0,0,bw,bh,5);
+      g.setPosition(ex,ey);
+      g.setInteractive(new Phaser.Geom.Rectangle(0,0,bw,bh),Phaser.Geom.Rectangle.Contains);
+      g.on('pointerover',()=>{g.clear();g.fillStyle(0xaa3333);g.fillRoundedRect(0,0,bw,bh,5);g.lineStyle(1,0xff8888);g.strokeRoundedRect(0,0,bw,bh,5);});
+      g.on('pointerout', ()=>{g.clear();g.fillStyle(0x882222);g.fillRoundedRect(0,0,bw,bh,5);g.lineStyle(1,0xff6666);g.strokeRoundedRect(0,0,bw,bh,5);});
+      g.on('pointerdown',()=>this.endPlayerTurn());
+      const t=this.add.text(ex+bw/2,ey+bh/2,'턴 종료',{fontSize:'12px',fontStyle:'bold',color:'#fff'}).setOrigin(0.5,0.5);
+      this.layerMenu.add([g,t]);
+    }
+
+    this.infoTxt.setText(u ? `[${u.name}] HP:${u.hp}/${u.maxHp}  ATK:${u.atk}  DEF:${u.def}  SPD:${u.spd}  MOV:${u.mov}  RNG:${u.range}  EXP:${u.exp}/${u.lv*20}` : '유닛을 클릭하여 선택하세요');
+    this.updateSimPanel();
+    if (u) this.updateSimUnit(u);
+  }
+}
+
+// ── Phaser 게임 실행 ────────────────────────────────────────
+new Phaser.Game({
+  type: Phaser.AUTO,
+  width: W, height: H,
+  backgroundColor: '#0d0d1e',
+  parent: 'game-container',
+  scene: [BattleScene],
+  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH }
+});
+</script>
+</body>
+</html>

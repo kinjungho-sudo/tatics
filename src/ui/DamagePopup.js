@@ -19,6 +19,25 @@ export default class DamagePopup {
    * @param {number}  damage  - 데미지 수치
    * @param {boolean} isAlly  - 아군 피격이면 true (빨간), 적 피격이면 false (흰색)
    */
+  showHeal(x, y, amount) {
+    const txt = this.scene.add.text(x, y, `+${amount}`, {
+      fontSize: '22px',
+      fontFamily: 'Arial',
+      fontStyle: 'bold',
+      fill: '#2ecc71',
+      stroke: '#000000',
+      strokeThickness: 3,
+    }).setOrigin(0.5).setDepth(30);
+    this.scene.tweens.add({
+      targets:  txt,
+      y:        y - 50,
+      alpha:    0,
+      duration: 800,
+      ease:     'Power2',
+      onComplete: () => txt.destroy(),
+    });
+  }
+
   show(x, y, damage, isAlly) {
     const color = isAlly ? '#e74c3c' : '#ffffff';
     const txt = this.scene.add.text(x, y, `-${damage}`, {

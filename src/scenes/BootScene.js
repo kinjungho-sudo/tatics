@@ -3,7 +3,8 @@
 //  scene-agent 담당
 // ============================================================
 
-import { SCENE } from '../config.js';
+import Phaser from 'phaser';
+import { SCENE, GAME_WIDTH, GAME_HEIGHT } from '../config.js';
 
 export default class BootScene extends Phaser.Scene {
   constructor() {
@@ -11,17 +12,30 @@ export default class BootScene extends Phaser.Scene {
   }
 
   preload() {
-    // 로딩 진행률 표시
-    const { width, height } = this.scale;
-    const bar = this.add.graphics();
+    const cx = GAME_WIDTH / 2;
+    const cy = GAME_HEIGHT / 2;
 
-    this.load.on('progress', (value) => {
-      bar.clear();
-      bar.fillStyle(0xffffff, 1);
-      bar.fillRect(width * 0.1, height / 2 - 8, (width * 0.8) * value, 16);
+    // 배경
+    this.add.rectangle(cx, cy, GAME_WIDTH, GAME_HEIGHT, 0x0d0d1a);
+
+    // 로딩 바 배경
+    this.add.rectangle(cx, cy, GAME_WIDTH * 0.6, 16, 0x222233);
+    const barFill = this.add.rectangle(cx - GAME_WIDTH * 0.3, cy, 0, 14, 0x3498db).setOrigin(0, 0.5);
+
+    this.add.text(cx, cy - 30, 'LOADING...', {
+      fontSize: '16px', fontFamily: 'Arial', fill: '#778899',
+    }).setOrigin(0.5);
+
+    this.load.on('progress', (v) => {
+      barFill.setDisplaySize(GAME_WIDTH * 0.6 * v, 14);
     });
 
-    // 아군 캐릭터 (직업별 대표 이미지)
+    // 이미지 로딩 실패 시 텍스처 없이 진행 (폴백: 색상 박스 유지)
+    this.load.on('loaderror', (file) => {
+      console.warn(`[Boot] 이미지 로딩 실패: ${file.key} (${file.url})`);
+    });
+
+    // 아군 캐릭터 (직업별)
     this.load.image('char-기사',   'sprites/characters/leon.png');
     this.load.image('char-마법사', 'sprites/characters/karin.png');
     this.load.image('char-궁수',   'sprites/characters/ophilia.png');
@@ -43,7 +57,6 @@ export default class BootScene extends Phaser.Scene {
   }
 
   create() {
-    // 에셋 로딩 완료 → 타이틀 씬으로 이동
     this.scene.start(SCENE.TITLE);
   }
 }

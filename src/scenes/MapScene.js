@@ -1,5 +1,5 @@
 // ============================================================
-//  MapScene — 스테이지 선택 화면 + 세이브/로드
+//  MapScene — 스테이지 선택 화면
 //  scene-agent 담당
 // ============================================================
 
@@ -10,69 +10,99 @@ import { stage02 } from '../data/stages/stage02.js';
 import { stage03 } from '../data/stages/stage03.js';
 import { stage04 } from '../data/stages/stage04.js';
 import { stage05 } from '../data/stages/stage05.js';
-import { saveSystem } from '../systems/SaveSystem.js';
-import { authSystem } from '../systems/AuthSystem.js';
+import { StageProgress } from '../systems/StageProgress.js';
 
-const STAGES = [stage01, stage02, stage03, stage04, stage05];
+const STAGES = [
+  { data: stage01, difficulty: '★☆☆', diffLabel: '입문' },
+  { data: stage02, difficulty: '★★☆', diffLabel: '보통' },
+  { data: stage03, difficulty: '★★☆', diffLabel: '보통' },
+  { data: stage04, difficulty: '★★★', diffLabel: '어려움' },
+  { data: stage05, difficulty: '★★★', diffLabel: '어려움' },
+];
+
+const CARD_W = 520;
+const CARD_H = 78;
+const START_Y = 140;
+const GAP     = 94;
 
 export default class MapScene extends Phaser.Scene {
   constructor() {
     super({ key: SCENE.MAP });
-    this._saveData  = null;
-    this._saveLabel = null;
-    this._badges    = {};   // stageId → Text 객체
   }
 
-  async create() {
+  create() {
     const cx = GAME_WIDTH / 2;
 
     // 배경
     this.add.rectangle(cx, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x111122);
 
     // 타이틀
-    this.add.text(cx, 36, '스테이지 선택', {
-      fontSize: '32px', fontFamily: 'Arial', fontStyle: 'bold', fill: '#f1c40f',
+    this.add.text(cx, 38, '스테이지 선택', {
+      fontSize: '30px', fontFamily: 'Arial', fontStyle: 'bold', fill: '#f1c40f',
     }).setOrigin(0.5);
 
-    // 세이브 상태 레이블
-    this._saveLabel = this.add.text(cx, 72, '', {
-      fontSize: '13px', fontFamily: 'Arial', fill: '#7fb3d3',
+    // 진행률
+    const clearedCnt = StageProgress.clearedCount();
+    this.add.text(cx, 76, `진행  ${clearedCnt} / ${STAGES.length}  클리어`, {
+      fontSize: '14px', fontFamily: 'Arial', fill: '#778899',
     }).setOrigin(0.5);
 
-    // 스테이지 버튼 목록
-    STAGES.forEach((stage, i) => {
-      const y  = 130 + i * 80;
-      const bg = this.add.rectangle(cx, y, 520, 64, 0x223344)
-        .setStrokeStyle(2, 0x3498db)
-        .setInteractive({ useHandCursor: true });
+    // 스테이지 카드 목록
+    STAGES.forEach(({ data: stage, difficulty, diffLabel }, i) => {
+      const y        = START_Y + i * GAP;
+      const unlocked = StageProgress.isUnlocked(stage.id);
+      const cleared  = StageProgress.isCleared(stage.id);
 
-      this.add.text(cx - 210, y - 10, `Stage ${i + 1}`, {
-        fontSize: '20px', fontFamily: 'Arial', fontStyle: 'bold', fill: '#ffffff',
+      // 카드 배경
+      const cardColor = unlocked ? 0x1e3a5f : 0x1a1a2a;
+      const borderCol = cleared ? 0x2ecc71 : unlocked ? 0x3498db : 0x333344;
+      const card = this.add.rectangle(cx, y, CARD_W, CARD_H, cardColor)
+        .setStrokeStyle(2, borderCol);
+
+      if (unlocked) {
+        card.setInteractive({ useHandCursor: true });
+        card.on('pointerover',  () => card.setFillStyle(0x254a72));
+        card.on('pointerout',   () => card.setFillStyle(cardColor));
+        card.on('pointerdown',  () => this.scene.start(SCENE.BATTLE, { stageId: stage.id }));
+      }
+
+      // 스테이지 번호 + 이름
+      this.add.text(cx - 230, y - 16, `Stage ${i + 1}  ${stage.name}`, {
+        fontSize: '17px', fontFamily: 'Arial', fontStyle: 'bold',
+        fill: unlocked ? '#ffffff' : '#555566',
       }).setOrigin(0, 0.5);
 
-      this.add.text(cx - 210, y + 12, stage.description || stage.name, {
-        fontSize: '13px', fontFamily: 'Arial', fill: '#aaaaaa',
+      // 설명
+      this.add.text(cx - 230, y + 10, stage.description || '', {
+        fontSize: '11px', fontFamily: 'Arial',
+        fill: unlocked ? '#8899aa' : '#444455',
       }).setOrigin(0, 0.5);
 
-      // 클리어 뱃지
-      const badge = this.add.text(cx + 200, y, '', {
-        fontSize: '16px', fontFamily: 'Arial',
-      }).setOrigin(0.5);
-      this._badges[stage.id] = badge;
+      // 난이도 별
+      this.add.text(cx + 100, y - 14, difficulty, {
+        fontSize: '13px', fontFamily: 'Arial',
+        fill: unlocked ? '#f1c40f' : '#333344',
+      }).setOrigin(0, 0.5);
 
-      bg.on('pointerover',  () => bg.setFillStyle(0x334466));
-      bg.on('pointerout',   () => bg.setFillStyle(0x223344));
-      bg.on('pointerdown',  () => this.scene.start(SCENE.BATTLE, { stageId: stage.id }));
+      // 난이도 텍스트
+      this.add.text(cx + 100, y + 10, diffLabel, {
+        fontSize: '11px', fontFamily: 'Arial',
+        fill: unlocked ? '#778899' : '#333344',
+      }).setOrigin(0, 0.5);
+
+      // 상태 배지
+      if (cleared) {
+        this.add.rectangle(cx + 218, y, 56, 26, 0x1a5c35)
+          .setStrokeStyle(1.5, 0x2ecc71);
+        this.add.text(cx + 218, y, 'CLEAR', {
+          fontSize: '13px', fontFamily: 'Arial', fontStyle: 'bold', fill: '#2ecc71',
+        }).setOrigin(0.5);
+      } else if (!unlocked) {
+        this.add.text(cx + 218, y, '🔒', {
+          fontSize: '20px', fontFamily: 'Arial',
+        }).setOrigin(0.5);
+      }
     });
-
-    // 저장 버튼
-    const saveBtn = this.add.text(GAME_WIDTH - 36, GAME_HEIGHT - 36, '💾 저장', {
-      fontSize: '16px', fontFamily: 'Arial', fill: '#2ecc71',
-    }).setOrigin(1, 0.5).setInteractive({ useHandCursor: true });
-
-    saveBtn.on('pointerover',  () => saveBtn.setStyle({ fill: '#58d68d' }));
-    saveBtn.on('pointerout',   () => saveBtn.setStyle({ fill: '#2ecc71' }));
-    saveBtn.on('pointerdown',  () => this._onSave(saveBtn));
 
     // 뒤로 가기
     const back = this.add.text(36, GAME_HEIGHT - 36, '← 타이틀', {
@@ -83,48 +113,13 @@ export default class MapScene extends Phaser.Scene {
     back.on('pointerout',  () => back.setStyle({ fill: '#778899' }));
     back.on('pointerdown', () => this.scene.start(SCENE.TITLE));
 
-    // 세이브 데이터 로드
-    await this._loadSave();
-  }
+    // 진행 초기화 버튼 (디버그)
+    const resetBtn = this.add.text(GAME_WIDTH - 20, GAME_HEIGHT - 36, '진행 초기화', {
+      fontSize: '12px', fontFamily: 'Arial', fill: '#334455',
+    }).setOrigin(1, 0.5).setInteractive({ useHandCursor: true });
 
-  async _loadSave() {
-    const data = await saveSystem.load(1);
-    this._saveData = data;
-
-    if (!data) {
-      this._saveLabel.setText(
-        authSystem.isLoggedIn ? '저장 데이터 없음' : '오프라인 모드 — 로그인 시 저장 가능'
-      );
-      return;
-    }
-
-    const cleared = saveSystem.clearedCount(data.stageProgress ?? {});
-    const time    = saveSystem.formatPlayTime(data.playTimeSec ?? 0);
-    this._saveLabel.setText(`클리어 ${cleared}스테이지 · 플레이 ${time}`);
-
-    // 클리어 뱃지 갱신
-    for (const [sid, badge] of Object.entries(this._badges)) {
-      badge.setText(data.stageProgress?.[sid]?.cleared ? '✅' : '');
-    }
-  }
-
-  async _onSave(btn) {
-    btn.setText('💾 저장 중...').disableInteractive();
-
-    const result = await saveSystem.save(1, {
-      stageProgress: this._saveData?.stageProgress ?? {},
-      unitData:      this._saveData?.unitData      ?? [],
-      playTimeSec:   this._saveData?.playTimeSec   ?? 0,
-    });
-
-    btn.setText(result.ok
-      ? (result.offline ? '💾 저장됨 (로컬)' : '💾 저장됨')
-      : '❌ 저장 실패'
-    );
-    if (result.ok) this._saveLabel.setText('저장 완료!');
-
-    this.time.delayedCall(2000, () => {
-      btn.setText('💾 저장').setInteractive({ useHandCursor: true });
-    });
+    resetBtn.on('pointerover', () => resetBtn.setStyle({ fill: '#e74c3c' }));
+    resetBtn.on('pointerout',  () => resetBtn.setStyle({ fill: '#334455' }));
+    resetBtn.on('pointerdown', () => { StageProgress.reset(); this.scene.restart(); });
   }
 }

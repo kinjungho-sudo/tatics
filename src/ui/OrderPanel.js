@@ -28,11 +28,12 @@ export default class OrderPanel {
    * @param {number}  anchorY     - 유닛 픽셀 y
    * @param {boolean} hasTarget   - 공격 가능한 적이 있는지
    */
-  show(anchorX, anchorY, hasTarget) {
+  show(anchorX, anchorY, hasTarget, canHeal = false) {
     this.hide();
 
     const actions = [];
     if (hasTarget) actions.push({ label: '공격', key: 'attack', color: 0xe74c3c });
+    if (canHeal)   actions.push({ label: '치료', key: 'heal',   color: 0x1abc9c });
     actions.push({ label: '대기', key: 'wait',   color: 0x27ae60 });
     actions.push({ label: '취소', key: 'cancel', color: 0x7f8c8d });
 

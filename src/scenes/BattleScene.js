@@ -16,6 +16,7 @@ import { growthTable }  from '../data/growthTable.js';
 import { TERRAIN }      from '../data/terrain.js';
 import { randomInt }    from '../utils/Random.js';
 import { StageProgress } from '../systems/StageProgress.js';
+import { saveSystem }   from '../systems/SaveSystem.js';
 import { stage01 }      from '../data/stages/stage01.js';
 import { stage02 }      from '../data/stages/stage02.js';
 import { stage03 }      from '../data/stages/stage03.js';
@@ -99,7 +100,7 @@ export default class BattleScene extends Phaser.Scene {
         }
       },
       onEnemyTurnStart: (turn) => this.turnBadge.show('적 턴', turn),
-      onTurnChanged:    (team, turn) => {
+      onTurnChanged:    (team, _turn) => {
         if (team === TEAM.ENEMY) this._runEnemyTurn();
       },
     });
@@ -132,11 +133,15 @@ export default class BattleScene extends Phaser.Scene {
         }
       }
 
+      // 직업별 기본 MP (성직자·마법사는 높게)
+      const maxMp = cfg.job === '마법사' ? 50 : cfg.job === '성직자' ? 40 : 30;
+
       return {
         id: cfg.id, name: cfg.name, job: cfg.job, team,
         x: cfg.x, y: cfg.y,
         lv, exp: 0,
         hp, maxHp, atk, def, spd,
+        mp: maxMp, maxMp,
         move:  base.move,
         range: base.range,
         acted: false,
@@ -535,6 +540,12 @@ export default class BattleScene extends Phaser.Scene {
       return;
     }
 
+    // 현재 위치 클릭 → 제자리 행동 (이동 없이 공격/치료 선택)
+    if (col === this.selectedUnit.x && row === this.selectedUnit.y) {
+      this._moveUnit(this.selectedUnit, col, row);
+      return;
+    }
+
     // 이동 가능한 타일인지 확인
     const isReachable = this.moveRange.some((t) => t.col === col && t.row === row);
     if (!isReachable) {
@@ -548,6 +559,9 @@ export default class BattleScene extends Phaser.Scene {
   }
 
   _moveUnit(unit, col, row) {
+    // 취소 시 복귀용 이전 위치 저장
+    unit._preMoveX = unit.x;
+    unit._preMoveY = unit.y;
     unit.x = col;
     unit.y = row;
     this._updateUnitSpritePosition(unit);
@@ -738,8 +752,25 @@ export default class BattleScene extends Phaser.Scene {
     } else if (action === 'wait') {
       this._waitUnit();
     } else if (action === 'cancel') {
-      // 이동 취소 → 원위치로 되돌리기는 복잡하므로 현 위치에서 대기
-      this._waitUnit();
+      const u = this.selectedUnit;
+      if (!u) return;
+      // 이동 전 위치로 복귀
+      if (u._preMoveX !== undefined) {
+        u.x = u._preMoveX;
+        u.y = u._preMoveY;
+        u._preMoveX = undefined;
+        u._preMoveY = undefined;
+        this._updateUnitSpritePosition(u);
+      }
+      this._healMode = false;
+      this.orderPanel.hide();
+      this._clearOverlay();
+      // SELECTED 상태로 복귀 — 이동 범위 재표시
+      this.phase = PHASE.SELECTED;
+      const allUnits = [...this.allies, ...this.enemies];
+      this.moveRange = this.moveSystem.calcMoveRange(u, this.mapData, allUnits, MAP_COLS, MAP_ROWS);
+      this._drawOverlay(this.moveRange, COLOR.MOVE_RANGE, 0.4);
+      this._drawSelectGlow(u);
     }
   }
 
@@ -756,16 +787,18 @@ export default class BattleScene extends Phaser.Scene {
     const liveEnemies = this.enemies.filter(e => e.hp > 0);
     const liveAllies  = this.allies.filter(a => a.hp > 0);
 
+    // 이동 전 위치 저장 (시각화용 — AI 실행 전에 기록)
+    const fromPos = new Map(liveEnemies.map(e => [e.id, { x: e.x, y: e.y }]));
+
     // 아군 지형 방어 보너스 임시 적용
     for (const a of liveAllies) {
       a._tb = this._getTerrainDefBonus(a);
       a.def += a._tb;
     }
 
-    // 적 AI 실행
+    // 적 AI 동기 실행 (스프라이트는 아직 안 움직임 — 위치 데이터만 업데이트)
     const events = this.aiSystem.runEnemyTurn(
-      liveEnemies, liveAllies, this.mapData, MAP_COLS, MAP_ROWS,
-      (ev) => this._handleAIEvent(ev)
+      liveEnemies, liveAllies, this.mapData, MAP_COLS, MAP_ROWS, () => {}
     );
 
     // 지형 방어 보너스 원복
@@ -773,32 +806,74 @@ export default class BattleScene extends Phaser.Scene {
       if (a._tb) { a.def -= a._tb; a._tb = 0; }
     }
 
-    // AI 행동 후 위치/상태 업데이트
-    for (const e of liveEnemies) {
-      if (e.sprite) this._updateUnitSpritePosition(e);
-    }
-
-    // 사망 유닛 제거
-    for (const a of liveAllies) {
-      if (a.hp <= 0) this._removeUnit(a);
-    }
-
-    // 승패 판정
-    if (this._checkWinLose()) return;
-
-    // 아군 턴으로 복귀
-    this.time.delayedCall(800, () => {
-      this.turnSystem.endEnemyTurn(this.allies.filter(a => a.hp > 0));
-      this.phase = PHASE.IDLE;
-    });
+    // 이벤트 순차 시각화 재생
+    this._playEnemyEvents(events, 0, fromPos, liveAllies);
   }
 
-  _handleAIEvent(ev) {
-    if (ev.type === 'attack' && ev.result) {
-      const { px, py } = gridToPixel(ev.target.x, ev.target.y, CELL_SIZE);
-      this.damagePopup.show(px, py, ev.result.damage, ev.target.team === TEAM.ALLY);
-      this._updateUnitHpBar(ev.target);
-      this._updateUnitHpBar(ev.unit);
+  _playEnemyEvents(events, idx, fromPos, liveAllies) {
+    if (idx >= events.length) {
+      // 모든 이벤트 완료 → 사망 처리 → 승패 판정 → 턴 전환
+      this._clearEnemyMarkers();
+      for (const a of liveAllies) {
+        if (a.hp <= 0) this._removeUnit(a);
+      }
+      if (this._checkWinLose()) return;
+      this.time.delayedCall(500, () => {
+        this.turnSystem.endEnemyTurn(this.allies.filter(a => a.hp > 0));
+        this.phase = PHASE.IDLE;
+      });
+      return;
+    }
+
+    const ev = events[idx];
+    const next = () => this._playEnemyEvents(events, idx + 1, fromPos, liveAllies);
+
+    if (ev.type === 'move') {
+      const unit = ev.unit;
+      const from = fromPos.get(unit.id) ?? { x: unit.x, y: unit.y };
+      const to   = ev.to;
+
+      // FROM 타일: 주황 반투명 잔상
+      this._showEnemyMarker(from.col ?? from.x, from.row ?? from.y, 0xe67e22, 0.45, true);
+      // TO 타일: 빨간 강조
+      this._showEnemyMarker(to.col, to.row, 0xe74c3c, 0.35, false);
+
+      // 스프라이트 이동
+      this._updateUnitSpritePosition(unit);
+      // fromPos 업데이트 (연속 이동 대비)
+      fromPos.set(unit.id, { x: to.col, y: to.row });
+
+      this.time.delayedCall(420, next);
+
+    } else if (ev.type === 'attack') {
+      if (ev.result) {
+        const { px, py } = gridToPixel(ev.target.x, ev.target.y, CELL_SIZE);
+        this.damagePopup.show(px, py, ev.result.damage, ev.target.team === TEAM.ALLY);
+        this._updateUnitHpBar(ev.target);
+        this._updateUnitHpBar(ev.unit);
+      }
+      this.time.delayedCall(450, next);
+    } else {
+      next();
+    }
+  }
+
+  // 적 행동 마커 (이동 시각화용 타일 오버레이)
+  _showEnemyMarker(col, row, color, alpha, fadeOut) {
+    if (!this._enemyMarkers) this._enemyMarkers = [];
+    const x = col * CELL_SIZE + CELL_SIZE / 2;
+    const y = row * CELL_SIZE + CELL_SIZE / 2;
+    const rect = this.add.rectangle(x, y, CELL_SIZE, CELL_SIZE, color, alpha).setDepth(5);
+    this._enemyMarkers.push(rect);
+    if (fadeOut) {
+      this.tweens.add({ targets: rect, alpha: 0, duration: 380, onComplete: () => rect.destroy() });
+    }
+  }
+
+  _clearEnemyMarkers() {
+    if (this._enemyMarkers) {
+      for (const m of this._enemyMarkers) { if (m.active) m.destroy(); }
+      this._enemyMarkers = [];
     }
   }
 
@@ -864,6 +939,33 @@ export default class BattleScene extends Phaser.Scene {
   _showResult(win) {
     this.phase = PHASE.RESULT;
     if (win) StageProgress.clearStage(this.stageId);
+
+    // ── 전투 기록 + 유닛 레벨 Supabase 저장 ──
+    const allySnapshot = this.allies.map(u => ({
+      id: u.id, name: u.name, job: u.job,
+      lv: u.lv, exp: u.exp,
+      hp: u.hp, maxHp: u.maxHp,
+      atk: u.atk, def: u.def, spd: u.spd,
+      move: u.move, range: u.range,
+    }));
+    saveSystem.saveBattleRecord({
+      stageId:   this.stageId,
+      won:       win,
+      turnCount: this.turnSystem?.turnCount ?? 0,
+      unitData:  allySnapshot,
+    });
+    // 슬롯1에 유닛 레벨/경험치 반영 (비동기, 결과 무시)
+    if (win) {
+      saveSystem.load(1).then(saved => {
+        const progress = saved?.stageProgress ?? {};
+        progress[this.stageId] = { cleared: true, turnCount: this.turnSystem?.turnCount ?? 0 };
+        saveSystem.save(1, {
+          stageProgress: progress,
+          unitData:      allySnapshot,
+          playTimeSec:   saved?.playTimeSec ?? 0,
+        });
+      });
+    }
 
     const cx = GAME_WIDTH / 2;
     const cy = GAME_HEIGHT / 2;

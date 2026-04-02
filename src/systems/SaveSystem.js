@@ -1,25 +1,23 @@
 // ============================================================
-//  SaveSystem — 세이브 / 로드 (슬롯 1~3)
-//  로그인 상태: Supabase save_slots 테이블
+//  SaveSystem — 세이브/로드 (슬롯 1~3) + 전투 기록
+//  로그인 상태: Supabase
 //  오프라인/미로그인: localStorage 폴백
 // ============================================================
 
 import { supabase } from '../lib/supabase.js';
 import { authSystem } from './AuthSystem.js';
 
-// save_slots 행 → 게임 데이터 형식으로 변환
+const lsKey = (slot) => `srpg_save_slot_${slot}`;
+
 function rowToSaveData(row) {
   return {
     slot:          row.slot_number,
-    stageProgress: row.stage_progress,  // { stage01: { cleared, turnCount }, ... }
-    unitData:      row.unit_data,        // [{ id, name, job, lv, exp, ... }, ...]
+    stageProgress: row.stage_progress,
+    unitData:      row.unit_data,
     playTimeSec:   row.play_time_sec,
     updatedAt:     row.updated_at,
   };
 }
-
-// localStorage 키
-const lsKey = (slot) => `srpg_save_slot_${slot}`;
 
 class SaveSystem {
   // ─────────────────────────────────────────
@@ -35,11 +33,9 @@ class SaveSystem {
       playTimeSec:   data.playTimeSec   ?? 0,
     };
 
-    // 오프라인 폴백
     if (!supabase || !authSystem.isLoggedIn) {
       localStorage.setItem(lsKey(slot), JSON.stringify({
-        ...payload,
-        savedAt: new Date().toISOString(),
+        ...payload, savedAt: new Date().toISOString(),
       }));
       return { ok: true, offline: true };
     }
@@ -54,16 +50,12 @@ class SaveSystem {
         play_time_sec:  payload.playTimeSec,
       }, { onConflict: 'user_id,slot_number' });
 
-    if (error) {
-      console.error('[Save] 저장 실패:', error.message);
-      return { ok: false, error: error.message };
-    }
+    if (error) { console.error('[Save] 저장 실패:', error.message); return { ok: false, error: error.message }; }
     return { ok: true };
   }
 
   // ─────────────────────────────────────────
   // 불러오기 (slot: 1~3)
-  // 반환: 세이브 데이터 또는 null (빈 슬롯)
   // ─────────────────────────────────────────
   async load(slot) {
     if (slot < 1 || slot > 3) throw new Error('슬롯은 1~3만 가능합니다.');
@@ -81,13 +73,12 @@ class SaveSystem {
       .maybeSingle();
 
     if (error) { console.error('[Save] 불러오기 실패:', error.message); return null; }
-    if (!data)  return null;
+    if (!data) return null;
     return rowToSaveData(data);
   }
 
   // ─────────────────────────────────────────
-  // 전체 슬롯 목록 (1~3 모두 반환, 빈 슬롯은 { slot, empty: true })
-  // MapScene에서 슬롯 선택 UI에 사용
+  // 전체 슬롯 목록
   // ─────────────────────────────────────────
   async loadAll() {
     if (!supabase || !authSystem.isLoggedIn) {
@@ -99,8 +90,7 @@ class SaveSystem {
     }
 
     const { data, error } = await supabase
-      .from('save_slots')
-      .select('*')
+      .from('save_slots').select('*')
       .eq('user_id', authSystem.userId)
       .order('slot_number');
 
@@ -108,8 +98,7 @@ class SaveSystem {
 
     return [1, 2, 3].map(slot => {
       const row = data.find(r => r.slot_number === slot);
-      if (!row) return { slot, empty: true };
-      return rowToSaveData(row);
+      return row ? rowToSaveData(row) : { slot, empty: true };
     });
   }
 
@@ -121,19 +110,67 @@ class SaveSystem {
       localStorage.removeItem(lsKey(slot));
       return { ok: true };
     }
-
     const { error } = await supabase
-      .from('save_slots')
-      .delete()
+      .from('save_slots').delete()
       .eq('user_id', authSystem.userId)
       .eq('slot_number', slot);
-
     if (error) { console.error('[Save] 삭제 실패:', error.message); return { ok: false }; }
     return { ok: true };
   }
 
   // ─────────────────────────────────────────
-  // 유틸: 플레이 시간 포맷 (초 → "00:00:00")
+  // 전투 기록 저장 (battle_records)
+  // record: { stageId, won, turnCount, unitData }
+  // ─────────────────────────────────────────
+  async saveBattleRecord(record) {
+    if (!supabase || !authSystem.isLoggedIn) {
+      // 오프라인: localStorage에 최근 20건 보관
+      const key  = 'srpg_battle_records';
+      const list = JSON.parse(localStorage.getItem(key) || '[]');
+      list.unshift({ ...record, playedAt: new Date().toISOString(), userId: 'offline' });
+      localStorage.setItem(key, JSON.stringify(list.slice(0, 20)));
+      return { ok: true, offline: true };
+    }
+
+    const { error } = await supabase.from('battle_records').insert({
+      user_id:    authSystem.userId,
+      stage_id:   record.stageId,
+      won:        record.won,
+      turn_count: record.turnCount,
+      unit_data:  record.unitData ?? [],
+    });
+
+    if (error) { console.error('[Save] 전투 기록 저장 실패:', error.message); return { ok: false }; }
+    return { ok: true };
+  }
+
+  // ─────────────────────────────────────────
+  // 전투 기록 불러오기 (최근 N건)
+  // ─────────────────────────────────────────
+  async getBattleRecords(limit = 20) {
+    if (!supabase || !authSystem.isLoggedIn) {
+      const list = JSON.parse(localStorage.getItem('srpg_battle_records') || '[]');
+      return list.slice(0, limit);
+    }
+
+    const { data, error } = await supabase
+      .from('battle_records').select('*')
+      .eq('user_id', authSystem.userId)
+      .order('played_at', { ascending: false })
+      .limit(limit);
+
+    if (error) { console.error('[Save] 전투 기록 불러오기 실패:', error.message); return []; }
+    return data.map(r => ({
+      stageId:   r.stage_id,
+      won:       r.won,
+      turnCount: r.turn_count,
+      unitData:  r.unit_data,
+      playedAt:  r.played_at,
+    }));
+  }
+
+  // ─────────────────────────────────────────
+  // 유틸
   // ─────────────────────────────────────────
   formatPlayTime(sec) {
     const h = Math.floor(sec / 3600);
@@ -142,13 +179,9 @@ class SaveSystem {
     return [h, m, s].map(v => String(v).padStart(2, '0')).join(':');
   }
 
-  // ─────────────────────────────────────────
-  // 클리어한 스테이지 수 반환
-  // ─────────────────────────────────────────
   clearedCount(stageProgress) {
-    return Object.values(stageProgress).filter(v => v?.cleared).length;
+    return Object.values(stageProgress ?? {}).filter(v => v?.cleared).length;
   }
 }
 
-// 싱글톤
 export const saveSystem = new SaveSystem();

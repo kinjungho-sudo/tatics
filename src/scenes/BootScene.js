@@ -21,9 +21,25 @@ export default class BootScene extends Phaser.Scene {
       bar.fillRect(width * 0.1, height / 2 - 8, (width * 0.8) * value, 16);
     });
 
-    // 향후 스프라이트/타일셋 로딩은 여기에 추가
-    // this.load.image('knight', 'assets/sprites/knight.png');
-    // this.load.image('tileset', 'assets/tilesets/field.png');
+    // 아군 캐릭터 (직업별 대표 이미지)
+    this.load.image('char-기사',   'sprites/characters/leon.png');
+    this.load.image('char-마법사', 'sprites/characters/karin.png');
+    this.load.image('char-궁수',   'sprites/characters/ophilia.png');
+    this.load.image('char-성직자', 'sprites/characters/pam.png');
+    this.load.image('char-기병',   'sprites/characters/brian.png');
+
+    // 추가 캐릭터 (향후 스테이지용)
+    this.load.image('char-랄프',   'sprites/characters/ralph.png');
+    this.load.image('char-리안',   'sprites/characters/rian.png');
+    this.load.image('char-마시아', 'sprites/characters/masia.png');
+    this.load.image('char-티티',   'sprites/characters/titi.png');
+
+    // 적군 (직업별)
+    this.load.image('enemy-기사',   'sprites/enemies/enemy-knight.png');
+    this.load.image('enemy-마법사', 'sprites/enemies/enemy-mage.png');
+    this.load.image('enemy-궁수',   'sprites/enemies/enemy-archer.png');
+    this.load.image('enemy-성직자', 'sprites/enemies/enemy-paladin.png');
+    this.load.image('enemy-기병',   'sprites/enemies/enemy-spear.png');
   }
 
   create() {

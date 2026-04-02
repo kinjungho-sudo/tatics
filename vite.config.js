@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  publicDir: 'assets',   // assets/ 폴더를 정적 파일 루트로 서빙
   server: {
     port: 3000,
     host: true,  // 모바일 기기 접근 허용

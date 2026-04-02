@@ -12,6 +12,10 @@ import {
   COLOR,
 } from '../config.js';
 import { JOB_BASE }     from '../data/units.js';
+import { growthTable }  from '../data/growthTable.js';
+import { TERRAIN }      from '../data/terrain.js';
+import { randomInt }    from '../utils/Random.js';
+import { StageProgress } from '../systems/StageProgress.js';
 import { stage01 }      from '../data/stages/stage01.js';
 import { stage02 }      from '../data/stages/stage02.js';
 import { stage03 }      from '../data/stages/stage03.js';
@@ -56,6 +60,7 @@ export default class BattleScene extends Phaser.Scene {
     this.phase        = PHASE.IDLE;
     this.selectedUnit = null;
     this.moveRange    = [];
+    this._healMode    = false;
 
     // 맵, 유닛 생성
     this.mapData  = this.stageData.map;
@@ -86,7 +91,13 @@ export default class BattleScene extends Phaser.Scene {
 
     // 턴 시스템 초기화
     this.turnSystem = new TurnSystem({
-      onAllyTurnStart:  (turn) => this.turnBadge.show('아군 턴', turn),
+      onAllyTurnStart:  (turn) => {
+        this.turnBadge.show('아군 턴', turn);
+        // acted=false 초기화 후 이미지 alpha 복원
+        for (const a of this.allies) {
+          if (a.hp > 0) this._refreshUnitActed(a);
+        }
+      },
       onEnemyTurnStart: (turn) => this.turnBadge.show('적 턴', turn),
       onTurnChanged:    (team, turn) => {
         if (team === TEAM.ENEMY) this._runEnemyTurn();
@@ -105,26 +116,31 @@ export default class BattleScene extends Phaser.Scene {
   // ──────────────────────────────────────────────────────────
   _createUnits(unitConfigs, team) {
     return unitConfigs.map((cfg) => {
-      const base = JOB_BASE[cfg.job];
-      const lv   = cfg.lv || 1;
+      const base   = JOB_BASE[cfg.job];
+      const lv     = cfg.lv || 1;
+
+      // lv>1 레벨 스케일링 (growthTable 기본값 × (lv-1))
+      let hp = base.hp, maxHp = base.maxHp;
+      let atk = base.atk, def = base.def, spd = base.spd;
+      if (lv > 1) {
+        const g = growthTable[cfg.job];
+        if (g) {
+          const n  = lv - 1;
+          hp   += g.hp  * n;  maxHp += g.hp  * n;
+          atk  += g.atk * n;  def   += g.def * n;
+          spd  += g.spd * n;
+        }
+      }
+
       return {
-        id:     cfg.id,
-        name:   cfg.name,
-        job:    cfg.job,
-        team,
-        x:      cfg.x,
-        y:      cfg.y,
-        lv,
-        exp:    0,
-        hp:     base.hp,
-        maxHp:  base.maxHp,
-        atk:    base.atk,
-        def:    base.def,
-        spd:    base.spd,
-        move:   base.move,
-        range:  base.range,
-        acted:  false,
-        sprite: null,    // Phaser 오브젝트 (spawnUnitSprites에서 설정)
+        id: cfg.id, name: cfg.name, job: cfg.job, team,
+        x: cfg.x, y: cfg.y,
+        lv, exp: 0,
+        hp, maxHp, atk, def, spd,
+        move:  base.move,
+        range: base.range,
+        acted: false,
+        sprite: null,
       };
     });
   }
@@ -162,7 +178,7 @@ export default class BattleScene extends Phaser.Scene {
   }
 
   // ──────────────────────────────────────────────────────────
-  //  유닛 스프라이트 (색깔 박스, 에셋 없을 때)
+  //  유닛 스프라이트 (이미지 기반)
   // ──────────────────────────────────────────────────────────
   _spawnUnitSprites() {
     const allUnits = [...this.allies, ...this.enemies];
@@ -171,62 +187,84 @@ export default class BattleScene extends Phaser.Scene {
     }
   }
 
+  // 직업 → 이미지 키 변환
+  _spriteKey(unit) {
+    const prefix = unit.team === TEAM.ALLY ? 'char' : 'enemy';
+    return `${prefix}-${unit.job}`;
+  }
+
   _createUnitSprite(unit) {
     const { px, py } = gridToPixel(unit.x, unit.y, CELL_SIZE);
-    const color = unit.team === TEAM.ALLY ? COLOR.ALLY : COLOR.ENEMY;
-    const size  = CELL_SIZE - 12;
+    const barW    = CELL_SIZE - 14;
+    const imgSize = CELL_SIZE - 8;
 
-    // 박스 + 테두리
-    const box = this.add.rectangle(px, py, size, size, color);
-    box.setStrokeStyle(2, 0x000000, 0.8);
+    // 캐릭터 이미지
+    const charImg = this.add.image(px, py - 2, this._spriteKey(unit))
+      .setDisplaySize(imgSize, imgSize);
 
-    // 직업 이니셜 텍스트
-    const initial = unit.job[0];
-    const label = this.add.text(px, py - 6, initial, {
-      fontSize: '18px',
-      fontFamily: 'Arial',
-      fontStyle: 'bold',
-      fill: '#ffffff',
-    }).setOrigin(0.5);
+    // 레벨 텍스트 (좌상단)
+    const lvTxt = this.add.text(
+      px - CELL_SIZE / 2 + 3,
+      py - CELL_SIZE / 2 + 2,
+      `L${unit.lv}`,
+      { fontSize: '8px', fontFamily: 'Arial', fontStyle: 'bold', fill: '#ffdd88', stroke: '#000000', strokeThickness: 1 }
+    );
 
-    // 이름 텍스트
-    const nameTxt = this.add.text(px, py + 8, unit.name, {
-      fontSize: '9px',
-      fontFamily: 'Arial',
-      fill: '#ffffff',
-    }).setOrigin(0.5);
+    // HP 바 배경
+    const hpBarBg = this.add.rectangle(px, py + CELL_SIZE / 2 - 6, barW, 5, 0x333333).setOrigin(0.5);
+    // HP 바 fill
+    const hpBar   = this.add.rectangle(px - barW / 2, py + CELL_SIZE / 2 - 6, barW, 5, 0x2ecc71).setOrigin(0, 0.5);
 
-    // HP 바 배경 (유닛 하단)
-    const hpBarBg = this.add.rectangle(px, py + 22, size - 4, 4, 0x333333).setOrigin(0.5);
-    // HP 바 (fill)
-    const hpBar   = this.add.rectangle(px - (size - 4) / 2, py + 22, size - 4, 4, 0x2ecc71).setOrigin(0, 0.5);
-
-    // 스프라이트 컨테이너 (순서: box, label, nameTxt, hpBarBg, hpBar)
-    const container = this.add.container(0, 0, [box, label, nameTxt, hpBarBg, hpBar]);
+    // 컨테이너 (순서: charImg, lvTxt, hpBarBg, hpBar)
+    const container = this.add.container(0, 0, [charImg, lvTxt, hpBarBg, hpBar]);
     this.unitLayer.add(container);
 
-    unit.sprite    = container;
-    unit.spriteBox = box;
-    unit.hpBar     = hpBar;
-    unit.hpBarBg   = hpBarBg;
+    unit.sprite   = container;
+    unit.charImg  = charImg;
+    unit.hpBar    = hpBar;
+    unit.hpBarBg  = hpBarBg;
+    unit.lvTxt    = lvTxt;
   }
 
   _updateUnitSpritePosition(unit) {
     const { px, py } = gridToPixel(unit.x, unit.y, CELL_SIZE);
-    const size = CELL_SIZE - 12;
+    const barW = CELL_SIZE - 14;
 
-    unit.sprite.getAt(0).setPosition(px, py).setSize(size, size);   // box
-    unit.sprite.getAt(1).setPosition(px, py - 6);                   // label
-    unit.sprite.getAt(2).setPosition(px, py + 8);                   // nameTxt
-    unit.sprite.getAt(3).setPosition(px, py + 22);                  // hpBarBg
-    unit.sprite.getAt(4).setPosition(px - (size - 4) / 2, py + 22); // hpBar
+    unit.charImg.setPosition(px, py - 2);
+    unit.lvTxt.setPosition(px - CELL_SIZE / 2 + 3, py - CELL_SIZE / 2 + 2);
+    unit.sprite.getAt(2).setPosition(px, py + CELL_SIZE / 2 - 6);            // hpBarBg
+    unit.sprite.getAt(3).setPosition(px - barW / 2, py + CELL_SIZE / 2 - 6); // hpBar
+  }
+
+  // 행동 완료 시 이미지 어둡게, 해제 시 복원
+  _refreshUnitActed(unit) {
+    if (!unit.charImg) return;
+    unit.charImg.setAlpha(unit.acted ? 0.45 : 1.0);
+  }
+
+  // 선택 강조 — 테두리 Graphics (선택 시 그리고, 해제 시 destroy)
+  _drawSelectGlow(unit) {
+    if (unit._selectGlow) unit._selectGlow.destroy();
+    const { px, py } = gridToPixel(unit.x, unit.y, CELL_SIZE);
+    const glow = this.add.graphics();
+    glow.lineStyle(3, COLOR.SELECTED, 1);
+    glow.strokeRect(px - CELL_SIZE / 2 + 2, py - CELL_SIZE / 2 + 2, CELL_SIZE - 4, CELL_SIZE - 4);
+    this.unitLayer.add(glow);
+    unit._selectGlow = glow;
+  }
+
+  _clearSelectGlow(unit) {
+    if (unit && unit._selectGlow) {
+      unit._selectGlow.destroy();
+      unit._selectGlow = null;
+    }
   }
 
   _updateUnitHpBar(unit) {
     if (!unit.hpBar) return;
-    const size  = CELL_SIZE - 12;
+    const barW  = CELL_SIZE - 14;
     const ratio = Math.max(0, unit.hp / unit.maxHp);
-    unit.hpBar.setDisplaySize((size - 4) * ratio, 4);
+    unit.hpBar.setDisplaySize(barW * ratio, 5);
     const col = ratio > 0.5 ? 0x2ecc71 : ratio > 0.25 ? 0xf39c12 : 0xe74c3c;
     unit.hpBar.setFillStyle(col);
   }
@@ -253,7 +291,11 @@ export default class BattleScene extends Phaser.Scene {
     } else if (this.phase === PHASE.SELECTED) {
       this._tryMoveOrReselect(col, row);
     } else if (this.phase === PHASE.MOVED) {
-      this._tryAttack(col, row);
+      if (this._healMode) {
+        this._tryHeal(col, row);
+      } else {
+        this._tryAttack(col, row);
+      }
     }
   }
 
@@ -275,8 +317,8 @@ export default class BattleScene extends Phaser.Scene {
     // StatPanel 업데이트
     this.statPanel.show(unit);
 
-    // 선택 테두리 강조
-    unit.spriteBox.setStrokeStyle(3, COLOR.SELECTED);
+    // 선택 강조 오버레이
+    this._drawSelectGlow(unit);
   }
 
   // ── 이동 또는 재선택 ──
@@ -286,7 +328,8 @@ export default class BattleScene extends Phaser.Scene {
     if (unit && unit !== this.selectedUnit && !unit.acted) {
       // 다른 아군 유닛 선택 → 재선택
       this._clearOverlay();
-      this.selectedUnit.spriteBox.setStrokeStyle(2, 0x000000, 0.8);
+      this._clearSelectGlow(this.selectedUnit);
+      this._refreshUnitActed(this.selectedUnit);
       this.phase = PHASE.IDLE;
       this._trySelectUnit(col, row);
       return;
@@ -319,9 +362,15 @@ export default class BattleScene extends Phaser.Scene {
       this._drawOverlay(atkTiles, COLOR.ATTACK_RANGE, 0.3);
     }
 
+    // 치료 가능 여부 (성직자 전용)
+    const canHeal = unit.job === '성직자' && this.allies.some(
+      (a) => a.hp > 0 && a.hp < a.maxHp && a !== unit &&
+             Math.abs(a.x - col) + Math.abs(a.y - row) <= unit.range
+    );
+
     // 행동 선택 패널 표시
     const { px, py } = gridToPixel(col, row, CELL_SIZE);
-    this.orderPanel.show(px, py, atkTargets.length > 0);
+    this.orderPanel.show(px, py, atkTargets.length > 0, canHeal);
   }
 
   // ── 공격 ──
@@ -335,8 +384,59 @@ export default class BattleScene extends Phaser.Scene {
     this._executeAttack(this.selectedUnit, target);
   }
 
+  // ── 치료 ──
+  _tryHeal(col, row) {
+    const target = this.allies.find(
+      (a) => a.x === col && a.y === row && a.hp > 0 && a.hp < a.maxHp
+    );
+    if (!target) return;
+    const dist = Math.abs(this.selectedUnit.x - col) + Math.abs(this.selectedUnit.y - row);
+    if (dist > this.selectedUnit.range) return;
+    this._executeHeal(this.selectedUnit, target);
+  }
+
+  _executeHeal(healer, target) {
+    const healAmt = Math.max(1, healer.atk + randomInt(0, 5));
+    target.hp = Math.min(target.maxHp, target.hp + healAmt);
+
+    this._healMode = false;
+    this._clearOverlay();
+    this.orderPanel.hide();
+
+    // 힐 팝업
+    const { px, py } = gridToPixel(target.x, target.y, CELL_SIZE);
+    this.damagePopup.showHeal(px, py, healAmt);
+    this._updateUnitHpBar(target);
+
+    // 치료 경험치 +5
+    const lvUps = this.expSystem.gainExp(healer, 5);
+    for (const ev of lvUps) this.levelUpPopup.show(healer, ev);
+
+    healer.acted = true;
+    this._refreshUnitActed(healer);
+
+    this.selectedUnit = null;
+    this.phase        = PHASE.IDLE;
+    this.statPanel.hide();
+
+    if (this.turnSystem.isAllyTurnComplete(this.allies.filter((a) => a.hp > 0))) {
+      this.time.delayedCall(500, () => this._endAllyTurn());
+    }
+  }
+
+  // ── 지형 방어 보너스 ──
+  _getTerrainDefBonus(unit) {
+    const tType   = this.mapData[unit.y]?.[unit.x] ?? 0;
+    const terrain = TERRAIN[tType];
+    return terrain ? Math.floor(unit.def * terrain.defBonus / 100) : 0;
+  }
+
   _executeAttack(attacker, defender) {
+    // 지형 방어 보너스 임시 적용
+    const bonus = this._getTerrainDefBonus(defender);
+    defender.def += bonus;
     const result = this.attackSystem.executeAttack(attacker, defender);
+    defender.def -= bonus;
     this.orderPanel.hide();
     this._clearOverlay();
 
@@ -365,8 +465,7 @@ export default class BattleScene extends Phaser.Scene {
 
     // 행동 완료
     attacker.acted = true;
-    attacker.spriteBox.setStrokeStyle(2, 0x000000, 0.3);
-    attacker.spriteBox.setAlpha(0.6);  // 행동 완료된 유닛 어둡게
+    this._refreshUnitActed(attacker);
 
     this.selectedUnit = null;
     this.phase        = PHASE.IDLE;
@@ -388,8 +487,7 @@ export default class BattleScene extends Phaser.Scene {
     this._clearOverlay();
 
     this.selectedUnit.acted = true;
-    this.selectedUnit.spriteBox.setStrokeStyle(2, 0x000000, 0.3);
-    this.selectedUnit.spriteBox.setAlpha(0.6);
+    this._refreshUnitActed(this.selectedUnit);
 
     this.selectedUnit = null;
     this.phase        = PHASE.IDLE;
@@ -404,8 +502,10 @@ export default class BattleScene extends Phaser.Scene {
 
   // ── 행동 취소 ──
   _cancelSelection() {
+    this._healMode = false;
     if (this.selectedUnit) {
-      this.selectedUnit.spriteBox.setStrokeStyle(2, 0x000000, 0.8);
+      this._clearSelectGlow(this.selectedUnit);
+      this._refreshUnitActed(this.selectedUnit);
     }
     this.selectedUnit = null;
     this.phase        = PHASE.IDLE;
@@ -419,7 +519,7 @@ export default class BattleScene extends Phaser.Scene {
   // ──────────────────────────────────────────────────────────
   _onOrderAction(action) {
     if (action === 'attack') {
-      // 공격 버튼 → 공격 모드 (타일 클릭으로 타겟 선택)
+      this._healMode = false;
       this._clearOverlay();
       const atkTargets = this.attackSystem.calcAtkRange(
         this.selectedUnit,
@@ -427,7 +527,14 @@ export default class BattleScene extends Phaser.Scene {
       );
       const atkTiles = atkTargets.map((t) => ({ col: t.x, row: t.y }));
       this._drawOverlay(atkTiles, COLOR.ATTACK_RANGE, 0.4);
-      // phase는 MOVED 유지 → 다음 클릭에서 _tryAttack
+    } else if (action === 'heal') {
+      this._healMode = true;
+      this._clearOverlay();
+      const healTiles = this.allies
+        .filter((a) => a.hp > 0 && a.hp < a.maxHp && a !== this.selectedUnit &&
+          Math.abs(a.x - this.selectedUnit.x) + Math.abs(a.y - this.selectedUnit.y) <= this.selectedUnit.range)
+        .map((a) => ({ col: a.x, row: a.y }));
+      this._drawOverlay(healTiles, 0x1abc9c, 0.5);
     } else if (action === 'wait') {
       this._waitUnit();
     } else if (action === 'cancel') {
@@ -441,10 +548,6 @@ export default class BattleScene extends Phaser.Scene {
   // ──────────────────────────────────────────────────────────
   _endAllyTurn() {
     this._cancelSelection();
-    // 행동 완료 표시 초기화 (알파 리셋)
-    for (const a of this.allies) {
-      if (a.hp > 0) a.spriteBox.setAlpha(1);
-    }
     this.turnSystem.endAllyTurn(this.allies, this.enemies.filter(e => e.hp > 0));
   }
 
@@ -453,11 +556,22 @@ export default class BattleScene extends Phaser.Scene {
     const liveEnemies = this.enemies.filter(e => e.hp > 0);
     const liveAllies  = this.allies.filter(a => a.hp > 0);
 
-    // 적 AI 실행 (이벤트 기반으로 애니메이션 처리)
+    // 아군 지형 방어 보너스 임시 적용
+    for (const a of liveAllies) {
+      a._tb = this._getTerrainDefBonus(a);
+      a.def += a._tb;
+    }
+
+    // 적 AI 실행
     const events = this.aiSystem.runEnemyTurn(
       liveEnemies, liveAllies, this.mapData, MAP_COLS, MAP_ROWS,
       (ev) => this._handleAIEvent(ev)
     );
+
+    // 지형 방어 보너스 원복
+    for (const a of this.allies) {
+      if (a._tb) { a.def -= a._tb; a._tb = 0; }
+    }
 
     // AI 행동 후 위치/상태 업데이트
     for (const e of liveEnemies) {
@@ -549,6 +663,8 @@ export default class BattleScene extends Phaser.Scene {
 
   _showResult(win) {
     this.phase = PHASE.RESULT;
+    if (win) StageProgress.clearStage(this.stageId);
+
     const cx = GAME_WIDTH / 2;
     const cy = GAME_HEIGHT / 2;
 

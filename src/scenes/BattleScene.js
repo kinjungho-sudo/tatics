@@ -182,7 +182,7 @@ export default class BattleScene extends Phaser.Scene {
 
     // 직업 이니셜 텍스트
     const initial = unit.job[0];
-    const label = this.add.text(px, py - 4, initial, {
+    const label = this.add.text(px, py - 6, initial, {
       fontSize: '18px',
       fontFamily: 'Arial',
       fontStyle: 'bold',
@@ -190,31 +190,45 @@ export default class BattleScene extends Phaser.Scene {
     }).setOrigin(0.5);
 
     // 이름 텍스트
-    const nameTxt = this.add.text(px, py + 12, unit.name, {
+    const nameTxt = this.add.text(px, py + 8, unit.name, {
       fontSize: '9px',
       fontFamily: 'Arial',
       fill: '#ffffff',
     }).setOrigin(0.5);
 
-    // 스프라이트 컨테이너
-    const container = this.add.container(0, 0, [box, label, nameTxt]);
+    // HP 바 배경 (유닛 하단)
+    const hpBarBg = this.add.rectangle(px, py + 22, size - 4, 4, 0x333333).setOrigin(0.5);
+    // HP 바 (fill)
+    const hpBar   = this.add.rectangle(px - (size - 4) / 2, py + 22, size - 4, 4, 0x2ecc71).setOrigin(0, 0.5);
+
+    // 스프라이트 컨테이너 (순서: box, label, nameTxt, hpBarBg, hpBar)
+    const container = this.add.container(0, 0, [box, label, nameTxt, hpBarBg, hpBar]);
     this.unitLayer.add(container);
 
     unit.sprite    = container;
     unit.spriteBox = box;
+    unit.hpBar     = hpBar;
+    unit.hpBarBg   = hpBarBg;
   }
 
   _updateUnitSpritePosition(unit) {
     const { px, py } = gridToPixel(unit.x, unit.y, CELL_SIZE);
-    // container 안의 각 child도 절대 위치이므로 box를 기준으로 이동
-    const box     = unit.sprite.getAt(0);
-    const label   = unit.sprite.getAt(1);
-    const nameTxt = unit.sprite.getAt(2);
-    const size    = CELL_SIZE - 12;
+    const size = CELL_SIZE - 12;
 
-    box.setPosition(px, py).setSize(size, size);
-    label.setPosition(px, py - 4);
-    nameTxt.setPosition(px, py + 12);
+    unit.sprite.getAt(0).setPosition(px, py).setSize(size, size);   // box
+    unit.sprite.getAt(1).setPosition(px, py - 6);                   // label
+    unit.sprite.getAt(2).setPosition(px, py + 8);                   // nameTxt
+    unit.sprite.getAt(3).setPosition(px, py + 22);                  // hpBarBg
+    unit.sprite.getAt(4).setPosition(px - (size - 4) / 2, py + 22); // hpBar
+  }
+
+  _updateUnitHpBar(unit) {
+    if (!unit.hpBar) return;
+    const size  = CELL_SIZE - 12;
+    const ratio = Math.max(0, unit.hp / unit.maxHp);
+    unit.hpBar.setDisplaySize((size - 4) * ratio, 4);
+    const col = ratio > 0.5 ? 0x2ecc71 : ratio > 0.25 ? 0xf39c12 : 0xe74c3c;
+    unit.hpBar.setFillStyle(col);
   }
 
   // ──────────────────────────────────────────────────────────
@@ -334,6 +348,10 @@ export default class BattleScene extends Phaser.Scene {
       const { px: ax, py: ay } = gridToPixel(attacker.x, attacker.y, CELL_SIZE);
       this.damagePopup.show(ax, ay, result.counterDamage, attacker.team === TEAM.ALLY);
     }
+
+    // HP 바 업데이트
+    this._updateUnitHpBar(defender);
+    this._updateUnitHpBar(attacker);
 
     // 처치 처리
     if (result.killed) this._removeUnit(defender);
@@ -465,6 +483,8 @@ export default class BattleScene extends Phaser.Scene {
     if (ev.type === 'attack' && ev.result) {
       const { px, py } = gridToPixel(ev.target.x, ev.target.y, CELL_SIZE);
       this.damagePopup.show(px, py, ev.result.damage, ev.target.team === TEAM.ALLY);
+      this._updateUnitHpBar(ev.target);
+      this._updateUnitHpBar(ev.unit);
     }
   }
 
@@ -532,24 +552,46 @@ export default class BattleScene extends Phaser.Scene {
     const cx = GAME_WIDTH / 2;
     const cy = GAME_HEIGHT / 2;
 
-    const overlay = this.add.rectangle(cx, cy, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.6);
+    this.add.rectangle(cx, cy, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.65).setDepth(40);
 
     const msg = win ? '승리!' : '패배...';
     const col = win ? '#f1c40f' : '#e74c3c';
-    this.add.text(cx, cy - 40, msg, {
+    this.add.text(cx, cy - 60, msg, {
       fontSize: '64px',
       fontFamily: 'Arial',
       fontStyle: 'bold',
       fill: col,
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(41);
 
-    const btn = this.add.text(cx, cy + 60, '스테이지 선택으로', {
-      fontSize: '24px',
+    if (win) {
+      // 다음 스테이지 번호 계산
+      const STAGE_IDS = ['stage01', 'stage02', 'stage03', 'stage04', 'stage05'];
+      const curIdx  = STAGE_IDS.indexOf(this.stageId);
+      const nextId  = curIdx >= 0 && curIdx < STAGE_IDS.length - 1 ? STAGE_IDS[curIdx + 1] : null;
+
+      if (nextId) {
+        const nextBtn = this.add.text(cx, cy + 20, `▶ 다음 스테이지`, {
+          fontSize: '26px',
+          fontFamily: 'Arial',
+          fontStyle: 'bold',
+          fill: '#2ecc71',
+        }).setOrigin(0.5).setDepth(41).setInteractive({ useHandCursor: true });
+
+        nextBtn.on('pointerover', () => nextBtn.setStyle({ fill: '#58d68d' }));
+        nextBtn.on('pointerout',  () => nextBtn.setStyle({ fill: '#2ecc71' }));
+        nextBtn.on('pointerdown', () => this.scene.start(SCENE.BATTLE, { stageId: nextId }));
+      }
+    }
+
+    const mapBtn = this.add.text(cx, cy + (win ? 80 : 20), '스테이지 선택으로', {
+      fontSize: '18px',
       fontFamily: 'Arial',
-      fill: '#ffffff',
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+      fill: '#aaaaaa',
+    }).setOrigin(0.5).setDepth(41).setInteractive({ useHandCursor: true });
 
-    btn.on('pointerdown', () => this.scene.start(SCENE.MAP));
+    mapBtn.on('pointerover', () => mapBtn.setStyle({ fill: '#cccccc' }));
+    mapBtn.on('pointerout',  () => mapBtn.setStyle({ fill: '#aaaaaa' }));
+    mapBtn.on('pointerdown', () => this.scene.start(SCENE.MAP));
   }
 
   // ──────────────────────────────────────────────────────────

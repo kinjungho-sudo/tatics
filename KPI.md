@@ -67,10 +67,10 @@
 | STEP | 에이전트 | 상태 | KPI 달성 |
 |------|---------|------|---------|
 | 1 | setup-agent | ✅ 2026-04-02 | 빌드 성공, 프로젝트 구조 생성 |
-| 2A | data-agent | ✅ 2026-04-02 | units/terrain/growthTable/stages(01~02) |
+| 2A | data-agent | ✅ 2026-04-02 | units/terrain/growthTable/stages(01~05) |
 | 2B | systems-agent | ✅ 2026-04-02 | BFS·데미지·반격·턴·AI·EXP 구현 |
-| 3 | scene-agent | ✅ 2026-04-02 | BattleScene 상태머신 전체 구현 |
-| 4 | ui-agent | ✅ 2026-04-02 | StatPanel·TurnBadge·OrderPanel·팝업 |
+| 3 | scene-agent | ✅ 2026-04-02 | BattleScene 상태머신 + 스테이지 진행 흐름 |
+| 4 | ui-agent | ✅ 2026-04-02 | HP바·레벨업팝업·승리화면·다음스테이지버튼 |
 | 5 | qa-agent | ⏳ 정호님 플레이테스트 후 | - |
 
 *상태: ⏳대기 / 🔄진행중 / ✅완료 / ❌이슈*

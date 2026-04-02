@@ -93,9 +93,12 @@ export default class LevelUpPopup {
     objs.push(btn);
 
     // 클릭 또는 2초 후 자동 닫힘
+    let closed = false;
     const close = () => {
+      if (closed) return;
+      closed = true;
+      if (timer) timer.remove();
       for (const o of objs) o.destroy();
-      this.scene.time.removeAllEvents(); // 타이머 정리
       this._showNext();
     };
 
@@ -103,7 +106,7 @@ export default class LevelUpPopup {
     btn.on('pointerover', () => btn.setStyle({ fill: '#ffffff' }));
     btn.on('pointerout',  () => btn.setStyle({ fill: '#aaaaaa' }));
 
-    this.scene.time.delayedCall(2000, close);
+    const timer = this.scene.time.delayedCall(2000, close);
 
     // 등장 애니메이션
     for (const o of objs) {

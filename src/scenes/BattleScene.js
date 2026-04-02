@@ -8,11 +8,15 @@ import Phaser from 'phaser';
 import {
   SCENE, PHASE, TEAM,
   CELL_SIZE, MAP_COLS, MAP_ROWS,
+  GAME_WIDTH, GAME_HEIGHT,
   COLOR,
 } from '../config.js';
 import { JOB_BASE }     from '../data/units.js';
 import { stage01 }      from '../data/stages/stage01.js';
 import { stage02 }      from '../data/stages/stage02.js';
+import { stage03 }      from '../data/stages/stage03.js';
+import { stage04 }      from '../data/stages/stage04.js';
+import { stage05 }      from '../data/stages/stage05.js';
 import MoveSystem       from '../systems/MoveSystem.js';
 import AttackSystem     from '../systems/AttackSystem.js';
 import TurnSystem       from '../systems/TurnSystem.js';
@@ -25,7 +29,7 @@ import DamagePopup      from '../ui/DamagePopup.js';
 import LevelUpPopup     from '../ui/LevelUpPopup.js';
 import { gridToPixel }  from '../utils/GridUtils.js';
 
-const STAGE_MAP = { stage01, stage02 };
+const STAGE_MAP = { stage01, stage02, stage03, stage04, stage05 };
 
 export default class BattleScene extends Phaser.Scene {
   constructor() {

@@ -127,6 +127,51 @@ class AuthSystem {
   }
 
   // ─────────────────────────────────────────
+  // 닉네임 변경 (profiles 테이블 업데이트)
+  // ─────────────────────────────────────────
+  async updateNickname(newName) {
+    if (!supabase || !this.isLoggedIn) return { ok: false, error: '로그인 필요' };
+    const trimmed = newName?.trim();
+    if (!trimmed || trimmed.length < 2) return { ok: false, error: '닉네임은 2자 이상' };
+    if (trimmed.length > 16) return { ok: false, error: '닉네임은 16자 이하' };
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({ username: trimmed })
+      .eq('id', this.userId);
+
+    if (error) return { ok: false, error: error.message };
+
+    // 로컬 user_metadata 반영 (재로그인 전까지 displayName에 바로 적용)
+    if (this.user) {
+      this.user = {
+        ...this.user,
+        user_metadata: { ...this.user.user_metadata, username: trimmed },
+      };
+    }
+    this._listeners.forEach(fn => fn(this.user));
+    return { ok: true };
+  }
+
+  // ─────────────────────────────────────────
+  // 클라우드 데이터 로드 (로그인 후 StageProgress + unitData 복원)
+  // saveSystem과 순환 의존 방지를 위해 외부에서 saveSystem을 주입
+  // ─────────────────────────────────────────
+  async loadCloudSave(saveSystem, StageProgress) {
+    if (!this.isLoggedIn) return null;
+    try {
+      const saved = await saveSystem.load(1);
+      if (saved && !saved.empty) {
+        StageProgress.applyAll(saved.stageProgress ?? {});
+        return saved;  // { stageProgress, unitData, playTimeSec }
+      }
+    } catch (e) {
+      console.warn('[Auth] 클라우드 세이브 로드 실패:', e.message);
+    }
+    return null;
+  }
+
+  // ─────────────────────────────────────────
   _applySession(session) {
     this.session = session;
     this.user    = session?.user ?? null;

@@ -81,7 +81,17 @@ export default class MapScene extends Phaser.Scene {
         card.setInteractive({ useHandCursor: true });
         card.on('pointerover',  () => card.setFillStyle(0x254a72));
         card.on('pointerout',   () => card.setFillStyle(cardColor));
-        card.on('pointerdown',  () => this.scene.start(SCENE.BATTLE, { stageId: stage.id }));
+        card.on('pointerdown',  () => {
+          // 저장된 유닛 레벨 로드 후 BattleScene에 전달
+          saveSystem.load(1).then(saved => {
+            this.scene.start(SCENE.BATTLE, {
+              stageId:       stage.id,
+              savedUnitData: saved?.unitData ?? [],
+            });
+          }).catch(() => {
+            this.scene.start(SCENE.BATTLE, { stageId: stage.id, savedUnitData: [] });
+          });
+        });
       }
 
       this.add.text(cx - 230, y - 16, `Stage ${i + 1}  ${stage.name}`, {
